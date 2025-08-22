@@ -1,0 +1,88 @@
+# -------------------------
+# OS / Editor / IDE
+# -------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# -------------------------
+# Python
+# -------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+*.log
+*.out
+*.tmp
+*.pickle
+*.parquet
+
+# Virtual environments
+.venv/
+venv/
+env/
+*.env
+!.env.example
+
+# Testing / Linting
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# -------------------------
+# Node.js / Frontend
+# -------------------------
+node_modules/
+dist/
+build/
+.next/
+.cache/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -------------------------
+# Data / Models / Outputs
+# (must live under AI_CACHE_ROOT, not repo)
+# -------------------------
+data/
+datasets/
+outputs/
+checkpoints/
+*.ckpt
+*.safetensors
+*.pt
+*.bin
+*.h5
+*.onnx
+
+# Hugging Face / Torch caches
+hf_cache/
+transformers_cache/
+torch_cache/
+
+# -------------------------
+# Logs / Runtime
+# -------------------------
+logs/
+*.log
+tmp/
+tmp_*/
+
+# -------------------------
+# Docker / CI
+# -------------------------
+docker-compose.override.yml
+.docker/
+docker/*.local.yml
