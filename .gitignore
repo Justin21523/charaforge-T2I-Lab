@@ -13,8 +13,10 @@ Thumbs.db
 # -------------------------
 __pycache__/
 *.py[cod]
+*$py.class
 *.pyo
 *.pyd
+.Python
 *.so
 *.egg-info/
 .eggs/
@@ -27,9 +29,18 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+ENV/
 env/
 *.env
 !.env.example
+env.bak/
+venv.bak/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Testing / Linting
 .pytest_cache/
@@ -44,6 +55,20 @@ htmlcov/
 node_modules/
 dist/
 build/
+develop-eggs/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFES
 .next/
 .cache/
 .npm/
@@ -52,13 +77,33 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# React build
+frontend/react_app/dist/
+frontend/react_app/build/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Jupyter
+.ipynb_checkpoints
+
+# Model files (never commit these!)
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.onnx
+
 # -------------------------
 # Data / Models / Outputs
 # (must live under AI_CACHE_ROOT, not repo)
 # -------------------------
-data/
-datasets/
-outputs/
+/models/
+/data/
+/datasets/
+/outputs/
 checkpoints/
 *.ckpt
 *.safetensors

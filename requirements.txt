@@ -1,0 +1,23 @@
+# requirements.txt (main)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.4.0
+python-multipart
+psutil
+torch>=2.1.0
+transformers>=4.35.0
+accelerate>=0.24.0
+
+# Optional for future phases
+gradio>=4.0.0
+faiss-cpu>=1.7.0
+sentence-transformers>=2.2.0
+
+# backend/requirements.txt (specific backend deps)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.4.0
+python-multipart
+psutil
+torch>=2.1.0
+transformers>=4.35.0
