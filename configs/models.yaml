@@ -1,0 +1,21 @@
+# configs/models.yaml
+models:
+  caption:
+    default: "Salesforce/blip2-opt-2.7b"
+    alternatives:
+      - "Salesforce/blip2-opt-6.7b"
+      - "Salesforce/blip2-flan-t5-xl"
+
+  vqa:
+    default: "llava-hf/llava-1.5-7b-hf"
+    alternatives:
+      - "llava-hf/llava-1.5-13b-hf"
+      - "Qwen/Qwen-VL-Chat" # Coming soon
+
+  optimization:
+    low_vram_threshold_gb: 12
+    enable_4bit_if_low_vram: true
+    enable_cpu_offload: true
+    enable_attention_slicing: true
+    enable_vae_slicing: true
+    torch_dtype: "float16"
