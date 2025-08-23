@@ -1,0 +1,100 @@
+# configs/agent.yaml
+# Agent Tool Registry Configuration
+
+tools:
+  - name: calculator
+    description: "Perform mathematical calculations and evaluate expressions"
+    function: "backend.tools.calculator.calculate"
+    parameters:
+      expression:
+        type: string
+        description: "Mathematical expression to evaluate (e.g., '2 + 3 * sin(pi/4)')"
+        required: true
+    safety_level: safe
+
+  - name: web_search
+    description: "Search the web for information on a given topic"
+    function: "backend.tools.web_search.search_web"
+    parameters:
+      query:
+        type: string
+        description: "Search query or keywords"
+        required: true
+      max_results:
+        type: integer
+        description: "Maximum number of search results to return"
+        default: 5
+        minimum: 1
+        maximum: 10
+    safety_level: safe
+
+  - name: fetch_url
+    description: "Fetch and read content from a web URL"
+    function: "backend.tools.web_search.fetch_url_content"
+    parameters:
+      url:
+        type: string
+        description: "URL to fetch content from"
+        required: true
+      max_length:
+        type: integer
+        description: "Maximum content length to return"
+        default: 1000
+        minimum: 100
+        maximum: 5000
+    safety_level: moderate
+
+  - name: list_files
+    description: "List files and directories in a specified path"
+    function: "backend.tools.file_operations.list_directory"
+    parameters:
+      path:
+        type: string
+        description: "Directory path to list (relative paths only)"
+        default: "."
+      max_items:
+        type: integer
+        description: "Maximum number of items to return"
+        default: 20
+        minimum: 1
+        maximum: 50
+    safety_level: safe
+
+  - name: read_file
+    description: "Read content from a text file"
+    function: "backend.tools.file_operations.read_text_file"
+    parameters:
+      file_path:
+        type: string
+        description: "Path to the text file to read"
+        required: true
+      max_length:
+        type: integer
+        description: "Maximum content length to return"
+        default: 2000
+        minimum: 100
+        maximum: 10000
+    safety_level: moderate
+
+# Agent behavior settings
+agent:
+  max_iterations: 5
+  default_temperature: 0.1
+  timeout_seconds: 30
+
+  # Safety settings
+  safety:
+    allowed_domains:
+      - "wikipedia.org"
+      - "github.com"
+      - "stackoverflow.com"
+    blocked_domains:
+      - "facebook.com"
+      - "twitter.com"
+    max_tool_calls_per_query: 10
+
+  # Tool execution limits
+  limits:
+    web_search_daily_limit: 100
+    file_read_daily_limit: 50
+    url_fetch_daily_limit: 20
