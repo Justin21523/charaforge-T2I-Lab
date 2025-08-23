@@ -19,7 +19,7 @@ from backend.core.cache import setup_shared_cache
 from backend.api import caption
 from backend.core.config import settings
 from backend.api.health import router as health_router
-from backend.api import caption, vqa, chat
+from backend.api import caption, vqa, chat, rag
 from backend.utils.logging import setup_logging
 
 setup_shared_cache()
@@ -263,6 +263,7 @@ app.include_router(health_router, prefix=settings.API_PREFIX, tags=["system"])
 app.include_router(caption.router, prefix=API_PREFIX, tags=["Caption"])
 app.include_router(vqa.router, prefix=API_PREFIX, tags=["VQA"])
 app.include_router(chat.router, prefix=API_PREFIX, tags=["Chat"])
+app.include_router(rag.router, prefix=API_PREFIX, tags=["RAG"])
 
 
 # Serve React build files (production)

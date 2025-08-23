@@ -4,8 +4,50 @@ import requests
 import os
 from PIL import Image
 import json
+from components.caption_tab import create_caption_tab
+from components.vqa_tab import create_vqa_tab
+from components.chat_tab import create_chat_tab
+from components.rag_tab import create_rag_tab
 
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+
+def create_app():
+    """Create main Gradio application with all tabs"""
+
+    api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
+
+    with gr.Blocks(
+        title="CharaForge Multi-Modal Lab",
+        theme=gr.themes.Soft(),
+        css="""
+        .gradio-container {
+            max-width: 1200px !important;
+        }
+        .tab-nav {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        }
+        """,
+    ) as app:
+
+        gr.Markdown(
+            """
+            # 🤖 CharaForge Multi-Modal Lab
+            ### 整合圖像理解、對話、文件問答的 AI 工具平台
+            """,
+            elem_classes=["text-center"],
+        )
+
+        with gr.Tabs():
+            # Existing tabs
+            create_caption_tab(api_base_url)
+            create_vqa_tab(api_base_url)
+            create_chat_tab(api_base_url)
+
+            # NEW: RAG tab
+            create_rag_tab(api_base_url)
+
+    return app
 
 
 def generate_caption(image, max_length, num_beams, temperature):

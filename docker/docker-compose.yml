@@ -1,0 +1,87 @@
+# docker/docker-compose.yml (UPDATE - add RAG dependencies)
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      - AI_CACHE_ROOT=/warehouse/cache
+      - API_PREFIX=/api/v1
+      - DEVICE=auto
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:7860
+    volumes:
+      - /mnt/ai_warehouse/cache:/warehouse/cache
+      - ../configs:/app/configs
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      - AI_CACHE_ROOT=/warehouse/cache
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DEVICE=auto
+    volumes:
+      - /mnt/ai_warehouse/cache:/warehouse/cache
+    command: celery -A backend.jobs.worker worker --loglevel=INFO --concurrency=2
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  gradio:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        APP_TYPE: gradio
+    environment:
+      - API_BASE_URL=http://api:8000
+    ports:
+      - "7860:7860"
+    depends_on:
+      - api
+
+  react:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        APP_TYPE: react
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  redis_data:

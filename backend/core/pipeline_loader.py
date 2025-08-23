@@ -74,5 +74,61 @@ class PipelineLoader:
             raise
 
 
+_chat_pipeline = None
+
+
+def get_chat_pipeline():
+    """Get or load chat pipeline for RAG"""
+    global _chat_pipeline
+
+    if _chat_pipeline is None:
+        print("Loading chat pipeline for RAG...")
+        try:
+            from transformers import pipeline
+
+            # Try Qwen first, fall back to smaller models
+            model_options = [
+                "Qwen/Qwen2-1.5B-Instruct",
+                "microsoft/DialoGPT-medium",
+                "facebook/blenderbot-400M-distill",
+            ]
+
+            for model_name in model_options:
+                try:
+                    _chat_pipeline = pipeline(
+                        "text-generation",
+                        model=model_name,
+                        device_map="auto",
+                        torch_dtype="auto",
+                        trust_remote_code=True,
+                    )
+                    print(f"✅ Loaded chat model: {model_name}")
+                    break
+                except Exception as e:
+                    print(f"❌ Failed to load {model_name}: {e}")
+                    continue
+
+            if _chat_pipeline is None:
+                raise RuntimeError("Failed to load any chat model")
+
+        except Exception as e:
+            print(f"Error loading chat pipeline: {e}")
+            raise
+
+    return _chat_pipeline
+
+
+def get_embedding_model():
+    """Get embedding model for testing"""
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer("BAAI/bge-base-en-v1.5", device="auto")
+        return model
+    except Exception as e:
+        print(f"Error loading embedding model: {e}")
+        raise
+
+
 # Global pipeline loader instance
 pipeline_loader = PipelineLoader()

@@ -1,0 +1,39 @@
+# configs/rag.yaml
+rag:
+  embedding:
+    model_name: "BAAI/bge-base-en-v1.5" # 支援中英文的嵌入模型
+    device: "auto"
+    max_seq_length: 512
+    normalize_embeddings: true
+
+  chunking:
+    default_chunk_size: 512
+    default_overlap: 50
+    min_chunk_size: 128
+    max_chunk_size: 1024
+
+  retrieval:
+    default_top_k: 3
+    max_top_k: 10
+    similarity_threshold: 0.3
+
+  generation:
+    default_max_length: 200
+    default_temperature: 0.7
+    max_response_length: 500
+
+  storage:
+    collections_path: "${AI_CACHE_ROOT}/rag_collections"
+    auto_save: true
+    backup_enabled: false
+
+  supported_formats:
+    - ".txt"
+    - ".pdf"
+    # Future: .docx, .md, .html
+
+  safety:
+    content_filter: true
+    max_file_size_mb: 50
+    max_collections: 20
+    max_documents_per_collection: 1000
