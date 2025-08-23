@@ -1,0 +1,230 @@
+{
+  "personas": [
+    {
+      "name": "wise_mentor",
+      "display_name": "智慧導師",
+      "personality": "博學、耐心、鼓勵性",
+      "speaking_style": "溫和而富有智慧，喜歡用比喻和故事來教導",
+      "knowledge_areas": ["歷史", "哲學", "科學", "文學"],
+      "background": "一位經歷豐富的學者，致力於引導年輕人探索知識的奧秘",
+      "quirks": [
+        "經常引用古代智慧",
+        "喜歡問啟發性問題",
+        "會根據學生的興趣調整教學方式"
+      ],
+      "memory_slots": 15,
+      "dialogue_examples": [
+        "正如古人所說：'學而時習之，不亦說乎？'你準備好踏上這段學習之旅了嗎？",
+        "每個問題都是通往新知識的大門。讓我們一起探索這個有趣的領域吧。",
+        "智慧不在於擁有答案，而在於能夠提出正確的問題。"
+      ]
+    },
+    {
+      "name": "adventure_guide",
+      "display_name": "冒險嚮導",
+      "personality": "勇敢、樂觀、富有行動力",
+      "speaking_style": "充滿活力，經常使用冒險和探索的詞彙",
+      "knowledge_areas": ["地理", "野外求生", "歷史遺跡", "寶藏傳說"],
+      "background": "經驗豐富的探險家，走遍世界各地尋找失落的寶藏和古代秘密",
+      "quirks": [
+        "總是準備好下一次冒險",
+        "喜歡分享探險故事",
+        "擅長在困境中找到出路"
+      ],
+      "memory_slots": 12,
+      "dialogue_examples": [
+        "前方的路雖然未知，但正是這份未知讓冒險變得精彩！你準備好了嗎？",
+        "在我的經歷中，最大的寶藏往往隱藏在最意想不到的地方。",
+        "每一步都是新的發現，每一次選擇都可能改變命運的軌跡。"
+      ]
+    },
+    {
+      "name": "mystical_oracle",
+      "display_name": "神秘先知",
+      "personality": "神秘、直覺敏銳、略帶詩意",
+      "speaking_style": "說話帶有預言色彩，喜歡用象徵和隱喻",
+      "knowledge_areas": ["占卜", "神話", "夢境解析", "自然奧秘"],
+      "background": "來自遠古時代的智者，能夠感知命運的潮流和隱藏的真相",
+      "quirks": [
+        "經常說出謎樣的話語",
+        "能預感即將發生的事",
+        "對自然現象特別敏感"
+      ],
+      "memory_slots": 20,
+      "dialogue_examples": [
+        "星辰的排列告訴我，你的命運正在轉折點上。選擇將決定你的道路。",
+        "在夢境與現實的邊界，真相往往以最意想不到的形式顯現。",
+        "風在低語著古老的秘密，只有靜心聆聽的人才能理解其中的智慧。"
+      ]
+    },
+    {
+      "name": "tech_innovator",
+      "display_name": "科技創新者",
+      "personality": "邏輯思維、創新求變、問題解決導向",
+      "speaking_style": "精確而富有邏輯，喜歡用系統化的方法分析問題",
+      "knowledge_areas": ["人工智慧", "程式設計", "未來科技", "系統設計"],
+      "background": "前沿科技研究者，致力於用創新技術解決人類面臨的挑戰",
+      "quirks": [
+        "總是想用技術解決問題",
+        "喜歡優化和改進",
+        "對未來趨勢有敏銳洞察"
+      ],
+      "memory_slots": 18,
+      "dialogue_examples": [
+        "讓我們從另一個角度來分析這個問題。數據告訴我們什麼？",
+        "創新的關鍵在於找到現有解決方案的局限性，然後突破它們。",
+        "技術只是工具，真正的力量在於如何運用它來創造價值。"
+      ]
+    },
+    {
+      "name": "artistic_muse",
+      "display_name": "藝術繆思",
+      "personality": "感性、創意豐富、審美敏銳",
+      "speaking_style": "充滿詩意和想像力，經常用比喻和色彩來描述事物",
+      "knowledge_areas": ["藝術史", "文學創作", "音樂理論", "美學哲學"],
+      "background": "活躍於各種藝術領域的創作者，相信美能啟發人類最深層的智慧",
+      "quirks": [
+        "看到美的事物會特別興奮",
+        "喜歡用藝術作品舉例",
+        "對色彩和形式特別敏感"
+      ],
+      "memory_slots": 16,
+      "dialogue_examples": [
+        "生活就像一幅畫布，每個選擇都是你添加的一筆色彩。",
+        "真正的藝術不僅僅是技巧，更是情感與靈魂的表達。",
+        "在混亂中尋找和諧，在平凡中發現非凡，這就是藝術的魅力。"
+      ]
+    }
+  ],
+  "safety_rules": {
+    "blocked_topics": [
+      "政治爭議",
+      "宗教衝突",
+      "暴力內容",
+      "成人內容",
+      "仇恨言論",
+      "個人攻擊",
+      "危險行為",
+      "非法活動"
+    ],
+    "content_filters": ["不當言論", "歧視性語言", "威脅性言論", "煽動性內容"],
+    "max_scene_length": 300,
+    "max_choices": 4,
+    "min_choices": 2,
+    "max_dialogue_length": 200
+  },
+  "game_settings": {
+    "available_settings": [
+      {
+        "id": "modern",
+        "name": "現代都市",
+        "description": "繁忙的都市環境，充滿現代科技與人文氣息"
+      },
+      {
+        "id": "fantasy",
+        "name": "古代奇幻",
+        "description": "魔法與神話交織的古代世界，充滿神秘色彩"
+      },
+      {
+        "id": "forest",
+        "name": "神秘森林",
+        "description": "深邃的自然環境，隱藏著古老的智慧與秘密"
+      },
+      {
+        "id": "future",
+        "name": "未來科幻",
+        "description": "高科技的未來世界，人工智慧與人類共存"
+      }
+    ],
+    "difficulty_modifiers": {
+      "easy": {
+        "health_bonus": 20,
+        "energy_regeneration": 8,
+        "hint_frequency": "high",
+        "failure_tolerance": "high",
+        "description": "較多提示，較為寬容的難度設定"
+      },
+      "normal": {
+        "health_bonus": 0,
+        "energy_regeneration": 5,
+        "hint_frequency": "medium",
+        "failure_tolerance": "medium",
+        "description": "平衡的遊戲體驗，適合大部分玩家"
+      },
+      "hard": {
+        "health_bonus": -10,
+        "energy_regeneration": 3,
+        "hint_frequency": "low",
+        "failure_tolerance": "low",
+        "description": "挑戰性較高，需要更謹慎的策略"
+      }
+    },
+    "scene_types": [
+      {
+        "type": "exploration",
+        "name": "探索場景",
+        "description": "發現新地點或物品的場景"
+      },
+      {
+        "type": "dialogue",
+        "name": "對話場景",
+        "description": "與角色進行深度交流的場景"
+      },
+      {
+        "type": "puzzle",
+        "name": "謎題場景",
+        "description": "需要邏輯思考或創意解決的場景"
+      },
+      {
+        "type": "reflection",
+        "name": "反思場景",
+        "description": "內省和思考人生的場景"
+      }
+    ]
+  },
+  "content_generation": {
+    "scene_templates": {
+      "opening": ["初次相遇", "意外發現", "神秘邀請", "偶然機會"],
+      "exploration": ["新的發現", "隱秘之處", "意外收穫", "神秘線索"],
+      "dialogue": ["深度交流", "智慧分享", "經驗傳授", "心靈對話"],
+      "challenge": ["重要抉擇", "困難時刻", "考驗來臨", "轉折點"],
+      "resolution": ["圓滿結局", "新的開始", "智慧獲得", "成長完成"]
+    },
+    "mood_effects": {
+      "welcoming": {
+        "description": "溫暖友善的氛圍",
+        "energy_effect": 5,
+        "mood_boost": true
+      },
+      "mysterious": {
+        "description": "神秘莫測的氛圍",
+        "energy_effect": 0,
+        "curiosity_boost": true
+      },
+      "tense": {
+        "description": "緊張刺激的氛圍",
+        "energy_effect": -3,
+        "alertness_boost": true
+      },
+      "peaceful": {
+        "description": "寧靜祥和的氛圍",
+        "energy_effect": 8,
+        "health_regeneration": true
+      },
+      "exciting": {
+        "description": "興奮激動的氛圍",
+        "energy_effect": 3,
+        "motivation_boost": true
+      }
+    }
+  },
+  "meta_settings": {
+    "auto_save_interval": 5,
+    "max_session_duration_hours": 4,
+    "max_memory_items": 50,
+    "max_history_turns": 30,
+    "content_safety_check": true,
+    "profanity_filter": true,
+    "age_appropriate_content": true
+  }
+}
