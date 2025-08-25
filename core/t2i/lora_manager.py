@@ -2,6 +2,11 @@
 from typing import Dict, List, Tuple
 import safetensors
 from peft import LoraConfig, get_peft_model
+from pathlib import Path
+
+from core.config import get_cache_paths, get_model_path
+from core.t2i.pipeline import PipelineManager
+from core.train.lora_trainer import LoRATrainer
 
 
 class LoRAManager:
@@ -28,8 +33,8 @@ class LoRAManager:
 
         print(f"[LoRA] Loading LoRA: {lora_id} with weight {weight}")
 
-        # TODO: Implement actual LoRA loading
-        # adapter = load_lora_weights(lora_path)
+        # Implement actual LoRA loading
+        adapter = load_lora_weights(lora_path)
         # Apply to current pipeline
 
         self.loaded_loras[lora_id] = {

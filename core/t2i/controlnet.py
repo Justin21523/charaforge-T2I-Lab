@@ -2,6 +2,10 @@
 from typing import Optional, Dict, Any
 import numpy as np
 from PIL import Image
+from peft import LoraConfig, get_peft_model
+from pathlib import Path
+from core.config import get_cache_paths, get_model_path
+from core.t2i.pipeline import PipelineManager
 
 
 class ControlNetManager:

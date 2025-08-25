@@ -2,11 +2,18 @@
 from typing import Dict, List, Optional, Union, Any
 from pathlib import Path
 import torch
-from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
-from diffusers import DDIMScheduler, DPMSolverMultistepScheduler
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
+    StableDiffusionPipeline,
+)
+from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
+    StableDiffusionXLPipeline,
+)
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+from diffusers.schedulers.scheduling_dpmsolver_multistep import (
+    DPMSolverMultistepScheduler,
+)
 
 from core.config import get_cache_paths, get_model_path
-from core.t2i.lora_manager import apply_loras
 
 
 class PipelineManager:
@@ -28,21 +35,20 @@ class PipelineManager:
 
         print(f"[Pipeline] Loading {pipeline_type} pipeline: {model_id}")
 
-        # TODO: Implement actual pipeline loading
-        # if pipeline_type == "sdxl":
-        #     pipeline = StableDiffusionXLPipeline.from_pretrained(
-        #         model_id,
-        #         torch_dtype=torch.float16,
-        #         use_safetensors=True,
-        #         device_map="auto"
-        #     )
-        # else:
-        #     pipeline = StableDiffusionPipeline.from_pretrained(
-        #         model_id,
-        #         torch_dtype=torch.float16,
-        #         use_safetensors=True,
-        #         device_map="auto"
-        #     )
+        if pipeline_type == "sdxl":
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                use_safetensors=True,
+                device_map="auto",
+            )
+        else:
+            pipeline = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                use_safetensors=True,
+                device_map="auto",
+            )
 
         # Mock pipeline for now
         pipeline = None
@@ -69,22 +75,22 @@ class PipelineManager:
 
         pipeline = self.pipelines[self.current_pipeline]
 
-        # TODO: Implement actual generation
-        # if seed:
-        #     generator = torch.Generator(device=self.device).manual_seed(seed)
-        # else:
-        #     generator = None
+        # Implement actual generation
+        if seed:
+            generator = torch.Generator(device=self.device).manual_seed(seed)
+        else:
+            generator = None
 
-        # result = pipeline(
-        #     prompt=prompt,
-        #     negative_prompt=negative_prompt,
-        #     width=width,
-        #     height=height,
-        #     num_inference_steps=num_inference_steps,
-        #     guidance_scale=guidance_scale,
-        #     generator=generator,
-        #     **kwargs
-        # )
+        result = pipeline(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            generator=generator,
+            **kwargs,
+        )
 
         # Mock result for now
         return {
