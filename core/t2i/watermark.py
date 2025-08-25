@@ -2,6 +2,8 @@
 from PIL import Image, ImageDraw, ImageFont
 from typing import Optional
 
+from core.config import get_cache_paths, get_model_path
+
 
 class WatermarkManager:
     """Handles watermarking and attribution for generated images"""
