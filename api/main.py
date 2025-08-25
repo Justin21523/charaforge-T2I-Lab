@@ -11,8 +11,6 @@ import pathlib
 from pathlib import Path
 import sys
 
-# Setup logging
-setup_logging()
 logger = logging.getLogger(__name__)
 
 # Configure logging
