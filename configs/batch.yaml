@@ -1,0 +1,37 @@
+# configs/batch.yaml - Batch Processing Configuration
+batch:
+  # Default settings
+  defaults:
+    max_batch_size: 100
+    max_concurrent_tasks: 4
+    retry_attempts: 3
+    retry_delay: 60 # seconds
+
+  # Task-specific settings
+  tasks:
+    caption:
+      max_batch_size: 200
+      timeout_minutes: 10
+      memory_limit_mb: 4096
+
+    vqa:
+      max_batch_size: 100
+      timeout_minutes: 15
+      memory_limit_mb: 6144
+
+    t2i:
+      max_batch_size: 50
+      timeout_minutes: 30
+      memory_limit_mb: 8192
+
+  # File upload limits
+  upload:
+    max_file_size_mb: 50
+    allowed_extensions: [".csv", ".json"]
+    temp_dir: ${AI_CACHE_ROOT}/temp/uploads
+
+  # Result storage
+  results:
+    output_dir: ${AI_CACHE_ROOT}/outputs/multi-modal-lab/batch
+    cleanup_after_days: 30
+    compress_results: true

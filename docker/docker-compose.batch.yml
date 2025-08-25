@@ -1,0 +1,190 @@
+# docker/docker-compose.batch.yml - Complete Batch Processing Stack
+version: "3.9"
+
+services:
+  # Redis for Celery broker and result backend
+  redis:
+    image: redis:7-alpine
+    container_name: multimodal-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Main API server
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: multimodal-api
+    restart: unless-stopped
+    environment:
+      - AI_CACHE_ROOT=/warehouse/cache
+      - API_PREFIX=/api/v1
+      - DEVICE=auto
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:7860
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+    volumes:
+      - /mnt/ai_warehouse/cache:/warehouse/cache
+      - ../configs:/app/configs
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python -c 'from backend.utils.logging import setup_logging; setup_logging()' &&
+             uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery worker for CPU tasks
+  worker-cpu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: multimodal-worker-cpu
+    restart: unless-stopped
+    environment:
+      - AI_CACHE_ROOT=/warehouse/cache
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+      - DEVICE=cpu
+    volumes:
+      - /mnt/ai_warehouse/cache:/warehouse/cache
+      - ../configs:/app/configs
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python -c 'from backend.utils.logging import setup_logging; setup_logging()' &&
+             celery -A backend.jobs.worker worker
+             --loglevel=INFO
+             --queues=default,caption
+             --concurrency=2
+             --max-tasks-per-child=20"
+
+  # Celery worker for GPU tasks
+  worker-gpu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: multimodal-worker-gpu
+    restart: unless-stopped
+    environment:
+      - AI_CACHE_ROOT=/warehouse/cache
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+      - DEVICE=auto
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - /mnt/ai_warehouse/cache:/warehouse/cache
+      - ../configs:/app/configs
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      sh -c "python -c 'from backend.utils.logging import setup_logging; setup_logging()' &&
+             celery -A backend.jobs.worker worker
+             --loglevel=INFO
+             --queues=vqa,t2i
+             --concurrency=1
+             --max-tasks-per-child=10"
+
+  # Celery Flower for monitoring
+  flower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: multimodal-flower
+    restart: unless-stopped
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A backend.jobs.worker flower
+      --port=5555
+      --broker=redis://redis:6379/0
+
+  # Gradio UI
+  gradio:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend-gradio
+    container_name: multimodal-gradio
+    restart: unless-stopped
+    environment:
+      - API_BASE_URL=http://api:8000
+      - API_PREFIX=/api/v1
+    ports:
+      - "7860:7860"
+    depends_on:
+      api:
+        condition: service_healthy
+    command: python frontend/gradio_app/app.py
+
+  # React UI
+  react:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend-react
+    container_name: multimodal-react
+    restart: unless-stopped
+    environment:
+      - REACT_APP_API_BASE=http://localhost:8000
+      - REACT_APP_API_PREFIX=/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # System monitoring
+  monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: multimodal-monitor
+    restart: unless-stopped
+    environment:
+      - AI_CACHE_ROOT=/warehouse/cache
+      - LOG_LEVEL=INFO
+    volumes:
+      - /mnt/ai_warehouse/cache:/warehouse/cache
+      - ../configs:/app/configs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: python scripts/resource_monitor.py
+
+volumes:
+  redis_data:
+
+networks:
+  default:
+    name: multimodal-network
+
