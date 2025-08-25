@@ -11,45 +11,6 @@ import pathlib
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(ROOT_DIR))
-
-# MUST import cache setup first
-from backend.core.cache import setup_shared_cache
-from backend.api import caption
-from backend.core.config import settings
-from backend.api.health import router as health_router
-from backend.api import caption, vqa, chat, rag
-from backend.utils.logging import setup_logging
-
-setup_shared_cache()
-
-# Shared Cache Bootstrap (必須在所有 import 之前)
-AI_CACHE_ROOT = os.getenv("AI_CACHE_ROOT", "/mnt/ai_warehouse/cache")
-for k, v in {
-    "HF_HOME": f"{AI_CACHE_ROOT}/hf",
-    "TRANSFORMERS_CACHE": f"{AI_CACHE_ROOT}/hf/transformers",
-    "HF_DATASETS_CACHE": f"{AI_CACHE_ROOT}/hf/datasets",
-    "HUGGINGFACE_HUB_CACHE": f"{AI_CACHE_ROOT}/hf/hub",
-    "TORCH_HOME": f"{AI_CACHE_ROOT}/torch",
-}.items():
-    os.environ[k] = v
-    pathlib.Path(v).mkdir(parents=True, exist_ok=True)
-
-# App-specific directories
-APP_DIRS = {
-    "MODELS_BLIP2": f"{AI_CACHE_ROOT}/models/blip2",
-    "MODELS_LLAVA": f"{AI_CACHE_ROOT}/models/llava",
-    "MODELS_QWEN": f"{AI_CACHE_ROOT}/models/qwen",
-    "MODELS_EMBEDDINGS": f"{AI_CACHE_ROOT}/models/embeddings",
-    "MODELS_LORA": f"{AI_CACHE_ROOT}/models/lora",
-    "OUTPUT_DIR": f"{AI_CACHE_ROOT}/outputs/multi-modal-lab",
-}
-for p in APP_DIRS.values():
-    pathlib.Path(p).mkdir(parents=True, exist_ok=True)
-
-print("[Cache]", AI_CACHE_ROOT, "| GPU:", torch.cuda.is_available())
-
 # Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
