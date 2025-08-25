@@ -1,4 +1,14 @@
 # core/train/dreambooth_trainer.py - DreamBooth implementation stub
+from typing import List, Dict, Any, Optional, Tuple
+from pathlib import Path
+import json, os, time
+import pandas as pd
+from PIL import Image
+from torch.utils.data import Dataset
+import torch
+
+from core.train.dataset import T2IDataset
+from core.config import get_cache_paths
 
 
 class DreamBoothTrainer:
@@ -11,45 +21,9 @@ class DreamBoothTrainer:
 
         print("[DreamBoothTrainer] Initialized (TODO: Implement)")
 
-    def train(self, dataset, progress_callback=None) -> Dict[str, Any]:
-        """DreamBooth training (TODO: Implement)"""
-        # TODO: Implement DreamBooth training
-        # This is more complex than LoRA and requires:
-        # 1. Prior preservation loss
-        # 2. Class images generation
-        # 3. Full model fine-tuning
-        # 4. Regularization techniques
-
-        return {
-            "status": "not_implemented",
-            "message": "DreamBooth training not yet implemented"
-        }RATrainer] Loading base model: {self.base_model}")
-
-        # TODO: Load actual pipeline
-        # self.pipeline = StableDiffusionXLPipeline.from_pretrained(
-        #     self.base_model,
-        #     torch_dtype=torch.float16,
-        #     use_safetensors=True
-        # )
-
-        # Setup LoRA configuration
-        lora_config = LoraConfig(
-            r=self.config.get("rank", 16),
-            lora_alpha=self.config.get("lora_alpha", 16),
-            target_modules=self.config.get("target_modules", ["to_k", "to_q", "to_v", "to_out.0"]),
-            lora_dropout=self.config.get("lora_dropout", 0.1),
-            bias="none",
-            task_type="FEATURE_EXTRACTION"
-        )
-
-        # TODO: Apply LoRA to UNet
-        # self.lora_layers = get_peft_model(self.pipeline.unet, lora_config)
-
-        print(f"[LoRATrainer] LoRA setup complete - rank: {lora_config.r}")
-
-    def train(self,
-              dataset: T2IDataset,
-              progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
+    def train(
+        self, dataset: T2IDataset, progress_callback: Optional[Callable] = None
+    ) -> Dict[str, Any]:
         """Main training loop"""
 
         print(f"[LoRATrainer] Starting training on {len(dataset)} samples")
@@ -92,13 +66,15 @@ class DreamBoothTrainer:
                 self.global_step += 1
 
                 if progress_callback:
-                    progress_callback({
-                        "step": self.global_step,
-                        "epoch": epoch,
-                        "loss": loss,
-                        "lr": learning_rate,
-                        "elapsed": time.time() - start_time
-                    })
+                    progress_callback(
+                        {
+                            "step": self.global_step,
+                            "epoch": epoch,
+                            "loss": loss,
+                            "lr": learning_rate,
+                            "elapsed": time.time() - start_time,
+                        }
+                    )
 
                 # Mock some delay
                 time.sleep(0.1)
@@ -110,7 +86,7 @@ class DreamBoothTrainer:
                 "global_step": self.global_step,
                 "train_loss": avg_loss,
                 "learning_rate": learning_rate,
-                "elapsed_time": time.time() - start_time
+                "elapsed_time": time.time() - start_time,
             }
             training_logs.append(log_entry)
 
@@ -129,7 +105,7 @@ class DreamBoothTrainer:
         self.save_checkpoint("final")
 
         # Save training logs
-        with open(self.output_dir / "training_logs.json", 'w') as f:
+        with open(self.output_dir / "training_logs.json", "w") as f:
             json.dump(training_logs, f, indent=2)
 
         total_time = time.time() - start_time
@@ -140,7 +116,7 @@ class DreamBoothTrainer:
             "total_steps": self.global_step,
             "final_loss": self.best_loss,
             "training_time": total_time,
-            "output_dir": str(self.output_dir)
+            "output_dir": str(self.output_dir),
         }
 
     def save_checkpoint(self, checkpoint_name: str):
@@ -156,10 +132,10 @@ class DreamBoothTrainer:
             "global_step": self.global_step,
             "epoch": self.epoch,
             "best_loss": self.best_loss,
-            "config": self.config
+            "config": self.config,
         }
 
-        with open(checkpoint_dir / "training_state.json", 'w') as f:
+        with open(checkpoint_dir / "training_state.json", "w") as f:
             json.dump(state, f, indent=2)
 
         print(f"[Lo]")
