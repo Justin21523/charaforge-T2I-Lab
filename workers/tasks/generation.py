@@ -18,8 +18,8 @@ def generate_single_image_task(
     steps: int = 25,
     guidance_scale: float = 7.5,
     seed: Optional[int] = None,
-    lora_ids: list = None,
-    lora_weights: list = None,
+    lora_ids: list = None,  # type: ignore
+    lora_weights: list = None,  # type: ignore
     safety_check: bool = True,
     **kwargs,
 ) -> Dict[str, Any]:
