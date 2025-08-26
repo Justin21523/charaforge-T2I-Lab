@@ -50,26 +50,27 @@ class Settings(BaseSettings):
     """Main application settings"""
 
     # Cache and paths
-    ai_cache_root: str = Field(default="../ai_warehouse/cache", env="AI_CACHE_ROOT")
+    ai_cache_root: str = Field(default="../ai_warehouse/cache", env="AI_CACHE_ROOT")  # type: ignore
 
     # API settings
-    api_host: str = Field(default="0.0.0.0", env="API_HOST")
-    api_port: int = Field(default=8000, env="API_PORT")
+    api_host: str = Field(default="0.0.0.0", env="API_HOST")  # type: ignore
+    api_port: int = Field(default=8000, env="API_PORT")  # type: ignore
     api_cors_origins: str = Field(
-        default="http://localhost:3000", env="API_CORS_ORIGINS"
+        default="http://localhost:3000", env="API_CORS_ORIGINS"  # type: ignore
     )
+    debug: bool = False
 
     # Redis/Celery
-    redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
+    redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")  # type: ignore
     celery_broker_url: str = Field(
-        default="redis://localhost:6379/0", env="CELERY_BROKER_URL"
+        default="redis://localhost:6379/0", env="CELERY_BROKER_URL"  # type: ignore
     )
     celery_result_backend: str = Field(
-        default="redis://localhost:6379/0", env="CELERY_RESULT_BACKEND"
+        default="redis://localhost:6379/0", env="CELERY_RESULT_BACKEND"  # type: ignore
     )
 
     # GPU/CUDA
-    cuda_visible_devices: str = Field(default="0", env="CUDA_VISIBLE_DEVICES")
+    cuda_visible_devices: str = Field(default="0", env="CUDA_VISIBLE_DEVICES")  # type: ignore
 
     # HuggingFace cache env vars
     def setup_hf_cache(self):

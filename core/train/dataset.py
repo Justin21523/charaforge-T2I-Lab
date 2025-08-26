@@ -11,12 +11,16 @@ from core.config import get_cache_paths, get_dataset_path
 
 
 class T2IDataset(Dataset):
-    """Text-to-Image training dataset with caching"""
+    """
+    Minimal dataset: expects
+      captions.jsonl  (each line: {"file": "images/xxx.png", "text": "..."} )
+      images/<files>
+    """
 
     def __init__(
         self,
-        dataset_name: str,
-        split: str = "train",
+        dataset_name: Optional[str] = None,
+        dataset_path: Optional[str] = None,
         resolution: int = 768,
         caption_column: str = "caption",
         image_column: str = "image_path",
@@ -24,22 +28,17 @@ class T2IDataset(Dataset):
     ):
 
         self.dataset_name = dataset_name
-        self.split = split
         self.resolution = resolution
         self.cache_paths = get_cache_paths()
 
         # Load metadata
-        dataset_path = get_dataset_path(dataset_name)
-        metadata_file = dataset_path / "metadata.parquet"
+        dataset_path = get_dataset_path(dataset_name)  # type: ignore
+        metadata_file = dataset_path / "metadata.parquet"  # type: ignore
 
         if not metadata_file.exists():
             raise FileNotFoundError(f"Dataset metadata not found: {metadata_file}")
 
         self.df = pd.read_parquet(metadata_file)
-
-        # Filter by split
-        if "split" in self.df.columns:
-            self.df = self.df[self.df["split"] == split]
 
         # Limit samples if specified
         if max_samples:
@@ -48,7 +47,7 @@ class T2IDataset(Dataset):
         self.caption_column = caption_column
         self.image_column = image_column
 
-        print(f"[Dataset] Loaded {len(self.df)} samples from {dataset_name}/{split}")
+        print(f"[Dataset] Loaded {len(self.df)} samples from {dataset_name}")
 
     def __len__(self) -> int:
         return len(self.df)
@@ -59,14 +58,16 @@ class T2IDataset(Dataset):
         # Load image
         image_path = Path(row[self.image_column])
         if not image_path.is_absolute():
-            dataset_path = get_dataset_path(self.dataset_name)
+            dataset_path = get_dataset_path(self.dataset_name)  # type: ignore
             image_path = dataset_path / image_path
 
         try:
             image = Image.open(image_path).convert("RGB")
 
             # Resize to target resolution
-            image = image.resize((self.resolution, self.resolution), Image.LANCZOS)
+            image = image.resize(
+                (self.resolution, self.resolution), Image.Resampling.LANCZOS
+            )
 
         except Exception as e:
             print(f"[Dataset] Error loading image {image_path}: {e}")
