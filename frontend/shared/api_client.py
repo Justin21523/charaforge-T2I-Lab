@@ -1,7 +1,7 @@
 # frontend/shared/api_client.py
 """
-Shared API client for SagaForge T2I Lab
-Supports both sync and async operations
+SagaForge T2I Lab - Python API Client
+Shared API client for PyQt and Gradio frontends
 """
 import requests
 import asyncio
@@ -19,139 +19,124 @@ class SagaForgeAPIClient:
 
     def __init__(self, base_url: str = "http://localhost:8000", timeout: int = 30):
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout  # 30 seconds
         self.session = requests.Session()
+
+    def request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Make HTTP request to API"""
+        url = f"{self.base_url}{endpoint}"
+
+        try:
+            response = self.session.request(
+                method=method, url=url, timeout=self.timeout, **kwargs
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                error_data = response.json() if response.content else {}
+                error_message = error_data.get(
+                    "message", f"HTTP {response.status_code}"
+                )
+                return {"status": "error", "message": error_message}
+
+        except requests.exceptions.RequestException as e:
+            return {"status": "error", "message": str(e)}
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "Invalid JSON response"}
 
     def health_check(self) -> Dict[str, Any]:
         """Check API health status"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/v1/health", timeout=5)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            return {"status": "error", "message": str(e)}
+        return self.request("GET", "/api/v1/health")
 
     def generate_image(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate single image"""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/t2i/generate",
-                json=params,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Image generation failed: {e}")
-            raise
+        """Generate image with T2I"""
+        return self.request("POST", "/api/v1/t2i/generate", json=params)
 
     def controlnet_generate(
         self, params: Dict[str, Any], control_type: str = "pose"
     ) -> Dict[str, Any]:
         """Generate image with ControlNet"""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/controlnet/{control_type}",
-                json=params,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"ControlNet generation failed: {e}")
-            raise
+        return self.request("POST", f"/api/v1/controlnet/{control_type}", json=params)
 
     def list_loras(self) -> List[Dict[str, Any]]:
         """List available LoRA models"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/v1/lora/list")
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to list LoRAs: {e}")
+        response = self.request("GET", "/api/v1/lora/list")
+        if response.get("status") == "error":
             return []
+        return response.get("loras", response if isinstance(response, list) else [])
 
     def load_lora(self, lora_id: str, weight: float = 1.0) -> Dict[str, Any]:
         """Load LoRA model"""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/lora/load",
-                json={"lora_id": lora_id, "weight": weight},
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to load LoRA: {e}")
-            raise
+        return self.request(
+            "POST", "/api/v1/lora/load", json={"lora_id": lora_id, "weight": weight}
+        )
 
     def unload_lora(self, lora_id: str) -> Dict[str, Any]:
         """Unload LoRA model"""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/lora/unload", json={"lora_id": lora_id}
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to unload LoRA: {e}")
-            raise
+        return self.request("POST", "/api/v1/lora/unload", json={"lora_id": lora_id})
+
+    def get_lora_status(self) -> Dict[str, Any]:
+        """Get loaded LoRA status"""
+        return self.request("GET", "/api/v1/lora/status")
 
     def submit_batch_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Submit batch generation job"""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/batch/submit",
-                json=job_data,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to submit batch job: {e}")
-            raise
+        return self.request("POST", "/api/v1/batch/submit", json=job_data)
 
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get batch job status"""
-        try:
-            response = self.session.get(f"{self.base_url}/api/v1/batch/status/{job_id}")
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get job status: {e}")
-            raise
+        return self.request("GET", f"/api/v1/batch/status/{job_id}")
+
+    def list_jobs(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List batch jobs"""
+        endpoint = "/api/v1/batch/jobs"
+        if status:
+            endpoint += f"?status={status}"
+        response = self.request("GET", endpoint)
+        if response.get("status") == "error":
+            return []
+        return response.get("jobs", response if isinstance(response, list) else [])
+
+    def cancel_job(self, job_id: str) -> Dict[str, Any]:
+        """Cancel batch job"""
+        return self.request("POST", f"/api/v1/batch/cancel/{job_id}")
 
     def submit_training_job(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Submit LoRA training job"""
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/finetune/lora/train",
-                json=config,
-                timeout=10,  # Training job submission should be quick
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to submit training job: {e}")
-            raise
+        return self.request("POST", "/api/v1/finetune/lora/train", json=config)
 
     def get_training_status(self, run_id: str) -> Dict[str, Any]:
         """Get training job status"""
-        try:
-            response = self.session.get(
-                f"{self.base_url}/api/v1/finetune/lora/status/{run_id}"
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get training status: {e}")
-            raise
+        return self._request("GET", f"/api/v1/finetune/lora/status/{run_id}")
 
-    def upload_file(self, file_path: Path, file_type: str = "image") -> Dict[str, Any]:
-        """Upload file to server"""
+    def list_training_jobs(self) -> List[Dict[str, Any]]:
+        """List training jobs"""
+        response = self.request("GET", "/api/v1/finetune/lora/jobs")
+        if response.get("status") == "error":
+            return []
+        return response.get("jobs", response if isinstance(response, list) else [])
+
+    def cancel_training(self, run_id: str) -> Dict[str, Any]:
+        """Cancel training job"""
+        return self.request("POST", f"/api/v1/finetune/lora/cancel/{run_id}")
+
+    def get_training_metrics(self, run_id: str) -> Dict[str, Any]:
+        """Get training metrics"""
+        return self.request("GET", f"/api/v1/finetune/lora/metrics/{run_id}")
+
+    def list_datasets(self) -> List[Dict[str, Any]]:
+        """List available datasets"""
+        response = self.request("GET", "/api/v1/datasets/list")
+        if response.get("status") == "error":
+            return []
+        return response.get("datasets", response if isinstance(response, list) else [])
+
+    def upload_file(self, file_path: str, file_type: str = "image") -> Dict[str, Any]:
+        """Upload file"""
         try:
             with open(file_path, "rb") as f:
-                files = {"file": (file_path.name, f, f"image/{file_path.suffix[1:]}")}
+                files = {"file": f}
                 data = {"file_type": file_type}
                 response = self.session.post(
                     f"{self.base_url}/api/v1/upload",
@@ -159,11 +144,25 @@ class SagaForgeAPIClient:
                     data=data,
                     timeout=self.timeout,
                 )
-                response.raise_for_status()
+
+            if response.status_code == 200:
                 return response.json()
+            else:
+                return {
+                    "status": "error",
+                    "message": f"Upload failed: {response.status_code}",
+                }
+
         except Exception as e:
-            logger.error(f"Failed to upload file: {e}")
-            raise
+            return {"status": "error", "message": str(e)}
+
+    def get_system_status(self) -> Dict[str, Any]:
+        """Get system status"""
+        return self.request("GET", "/api/v1/monitoring/status")
+
+    def get_resource_usage(self) -> Dict[str, Any]:
+        """Get resource usage"""
+        return self.request("GET", "/api/v1/monitoring/resources")
 
 
 class AsyncSagaForgeAPIClient:
