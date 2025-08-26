@@ -1,21 +1,15 @@
 # backend/api/batch.py - Batch API Endpoints
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from backend.schemas.batch import (
-    BatchSubmitRequest,
-    BatchStatusResponse,
-    BatchListResponse,
-)
-from backend.jobs.batch_tasks import process_caption_batch, process_vqa_batch
-from backend.jobs.worker import celery_app
-from backend.utils.logging import get_logger
+import logging
 import json
 import uuid
 import pandas as pd
 import io
 from typing import Optional
+from workers.celery_app import celery_app
 
 router = APIRouter()
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @router.post("/batch/submit", response_model=dict)
@@ -41,10 +35,10 @@ async def submit_batch_job(
         content = await file.read()
 
         # Parse file based on extension
-        if file.filename.endswith(".csv"):
+        if file.filename.endswith(".csv"):  # type: ignore
             df = pd.read_csv(io.StringIO(content.decode("utf-8")))
             items = df.to_dict("records")
-        elif file.filename.endswith(".json"):
+        elif file.filename.endswith(".json"):  # type: ignore
             data = json.loads(content.decode("utf-8"))
             items = data if isinstance(data, list) else data.get("items", [])
         else:
