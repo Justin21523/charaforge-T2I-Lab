@@ -1,155 +1,150 @@
 # frontend/gradio_app/app.py
+"""
+SagaForge T2I Lab - Gradio Web Interface
+Main Gradio application
+"""
 import gradio as gr
-import requests
 import os
-from PIL import Image
+import sys
+from pathlib import Path
+import tempfile
 import json
-from components.caption_tab import create_caption_tab
-from components.vqa_tab import create_vqa_tab
-from components.chat_tab import create_chat_tab
-from components.rag_tab import create_rag_tab
 
-API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from frontend.shared.api_client import SagaForgeAPIClient
+from frontend.shared.constants import DEFAULT_GENERATION_PARAMS, CONTROLNET_TYPES
+from frontend.gradio_app.components import (
+    generation,
+    lora_management,
+    batch_processing,
+    training_monitor,
+)
+
+# Initialize API client
+api_client = SagaForgeAPIClient()
 
 
-def create_app():
-    """Create main Gradio application with all tabs"""
+def check_api_health():
+    """Check API health and return status"""
+    health = api_client.health_check()
+    if health.get("status") == "ok":
+        return "✅ API 連線正常", "green"
+    else:
+        return f"❌ API 連線失敗: {health.get('message', 'Unknown error')}", "red"
 
-    api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
 
-    with gr.Blocks(
-        title="CharaForge Multi-Modal Lab",
-        theme=gr.themes.Soft(),
-        css="""
-        .gradio-container {
-            max-width: 1200px !important;
-        }
-        .tab-nav {
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        }
-        """,
-    ) as app:
+def create_main_interface():
+    """Create the main Gradio interface"""
 
-        gr.Markdown(
-            """
-            # 🤖 CharaForge Multi-Modal Lab
-            ### 整合圖像理解、對話、文件問答的 AI 工具平台
-            """,
-            elem_classes=["text-center"],
-        )
+    # Custom CSS
+    css = """
+    .gradio-container {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .status-ok { color: green; font-weight: bold; }
+    .status-error { color: red; font-weight: bold; }
+    .image-preview { max-height: 400px; }
+    .parameter-group { border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin: 10px 0; }
+    .generate-btn {
+        background: linear-gradient(45deg, #1e3a8a, #3b82f6) !important;
+        color: white !important;
+        font-size: 16px !important;
+        padding: 12px 24px !important;
+        border-radius: 8px !important;
+    }
+    """
 
+    with gr.Blocks(css=css, title="SagaForge T2I Lab", theme=gr.themes.Soft()) as app:
+        gr.Markdown("# 🎨 SagaForge T2I Lab")
+        gr.Markdown("專業的動畫角色文生圖與 LoRA 訓練平台")
+
+        # API Status
+        with gr.Row():
+            api_status = gr.HTML()
+            refresh_status_btn = gr.Button("刷新狀態", size="sm")
+
+        def update_status():
+            message, color = check_api_health()
+            return f'<span style="color: {color}; font-weight: bold;">{message}</span>'
+
+        refresh_status_btn.click(update_status, outputs=[api_status])
+        app.load(update_status, outputs=[api_status])
+
+        # Main tabs
         with gr.Tabs():
-            # Existing tabs
-            create_caption_tab(api_base_url)
-            create_vqa_tab(api_base_url)
-            create_chat_tab(api_base_url)
+            # Image Generation Tab
+            with gr.TabItem("🖼️ 圖片生成"):
+                generation_interface = generation.create_generation_interface(
+                    api_client
+                )
 
-            # NEW: RAG tab
-            create_rag_tab(api_base_url)
+            # LoRA Management Tab
+            with gr.TabItem("🎭 LoRA 管理"):
+                lora_interface = lora_management.create_lora_interface(api_client)
+
+            # Batch Processing Tab
+            with gr.TabItem("⚡ 批次處理"):
+                batch_interface = batch_processing.create_batch_interface(api_client)
+
+            # Training Monitor Tab
+            with gr.TabItem("🔬 訓練監控"):
+                training_interface = training_monitor.create_training_interface(
+                    api_client
+                )
+
+            # Help Tab
+            with gr.TabItem("❓ 說明"):
+                with gr.Column():
+                    gr.Markdown(
+                        """
+                    ## 使用說明
+
+                    ### 🖼️ 圖片生成
+                    - 輸入正面和負面提示詞
+                    - 調整生成參數（尺寸、步數、CFG等）
+                    - 可選擇啟用 ControlNet 進行精確控制
+
+                    ### 🎭 LoRA 管理
+                    - 瀏覽可用的 LoRA 模型
+                    - 載入/卸載 LoRA 模型
+                    - 調整 LoRA 權重
+
+                    ### ⚡ 批次處理
+                    - 上傳 CSV 或 JSON 格式的任務檔案
+                    - 監控批次生成進度
+                    - 下載生成結果
+
+                    ### 🔬 訓練監控
+                    - 提交 LoRA 訓練任務
+                    - 實時監控訓練進度
+                    - 查看訓練指標和損失曲線
+
+                    ## 技術支援
+                    - API 文檔: http://localhost:8000/docs
+                    - 問題回報: GitHub Issues
+                    """
+                    )
+
+        # Footer
+        gr.Markdown("---")
+        gr.Markdown("© 2024 SagaForge T2I Lab | Powered by Gradio")
 
     return app
 
 
-def generate_caption(image, max_length, num_beams, temperature):
-    """Call caption API and return result"""
-    try:
-        if image is None:
-            return "Please upload an image first."
-
-        # Prepare request
-        files = {"image": ("image.png", image, "image/png")}
-        params = {
-            "max_length": max_length,
-            "num_beams": num_beams,
-            "temperature": temperature,
-        }
-
-        # Call API
-        response = requests.post(
-            f"{API_BASE}/api/v1/caption", files=files, params=params, timeout=30
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            return f"**Caption:** {result['caption']}\n\n**Model:** {result['model_used']}\n**Time:** {result['elapsed_ms']}ms"
-        else:
-            return f"Error: {response.status_code} - {response.text}"
-
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-
-def check_api_health():
-    """Check if API is available"""
-    try:
-        response = requests.get(f"{API_BASE}/api/v1/health", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            return f"✅ API healthy | GPU: {data['gpu_available']}"
-        else:
-            return f"❌ API error: {response.status_code}"
-    except:
-        return f"❌ API unavailable at {API_BASE}"
-
-
-# Gradio Interface
-with gr.Blocks(title="CharaForge Multi-Modal Lab", theme=gr.themes.Soft()) as app:
-    gr.Markdown("# 🎨 CharaForge Multi-Modal Lab")
-    gr.Markdown("Upload an image to generate AI captions using BLIP-2")
-
-    # API Status
-    with gr.Row():
-        api_status = gr.Textbox(
-            value=check_api_health(), label="API Status", interactive=False
-        )
-        refresh_btn = gr.Button("🔄 Refresh")
-
-    # Main Interface
-    with gr.Row():
-        with gr.Column(scale=1):
-            # Input controls
-            image_input = gr.Image(label="Upload Image", type="pil", height=300)
-
-            with gr.Accordion("Advanced Settings", open=False):
-                max_length = gr.Slider(
-                    minimum=10, maximum=200, value=50, step=5, label="Max Length"
-                )
-                num_beams = gr.Slider(
-                    minimum=1, maximum=10, value=3, step=1, label="Num Beams"
-                )
-                temperature = gr.Slider(
-                    minimum=0.1, maximum=2.0, value=1.0, step=0.1, label="Temperature"
-                )
-
-            generate_btn = gr.Button("🎯 Generate Caption", variant="primary")
-
-        with gr.Column(scale=1):
-            # Output
-            caption_output = gr.Markdown(
-                label="Generated Caption",
-                value="Upload an image and click 'Generate Caption' to start.",
-            )
-
-    # Examples
-    gr.Examples(
-        examples=[
-            ["examples/anime_girl.jpg", 50, 3, 1.0],
-            ["examples/landscape.jpg", 30, 5, 0.8],
-        ],
-        inputs=[image_input, max_length, num_beams, temperature],
-        outputs=caption_output,
-        fn=generate_caption,
-        cache_examples=False,
-    )
-
-    # Event handlers
-    generate_btn.click(
-        fn=generate_caption,
-        inputs=[image_input, max_length, num_beams, temperature],
-        outputs=caption_output,
-    )
-
-    refresh_btn.click(fn=check_api_health, outputs=api_status)
-
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=7860, show_error=True, debug=True)
+    # Create and launch the interface
+    app = create_main_interface()
+
+    # Launch settings
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        debug=True,
+        show_tips=True,
+        enable_queue=True,
+        max_threads=10,
+    )
