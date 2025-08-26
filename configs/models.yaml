@@ -1,21 +1,102 @@
 # configs/models.yaml
-models:
-  caption:
-    default: "Salesforce/blip2-opt-2.7b"
-    alternatives:
-      - "Salesforce/blip2-opt-6.7b"
-      - "Salesforce/blip2-flan-t5-xl"
+base_models:
+  # Stable Diffusion XL
+  sdxl_base:
+    model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+    type: "sdxl"
+    resolution: 1024
+    description: "Stable Diffusion XL base model"
+    memory_requirements:
+      minimum_vram_gb: 8
+      recommended_vram_gb: 12
 
-  vqa:
-    default: "llava-hf/llava-1.5-7b-hf"
-    alternatives:
-      - "llava-hf/llava-1.5-13b-hf"
-      - "Qwen/Qwen-VL-Chat" # Coming soon
+  sdxl_turbo:
+    model_id: "stabilityai/sdxl-turbo"
+    type: "sdxl"
+    resolution: 512
+    description: "SDXL Turbo - fast generation"
+    memory_requirements:
+      minimum_vram_gb: 6
+      recommended_vram_gb: 8
 
-  optimization:
-    low_vram_threshold_gb: 12
-    enable_4bit_if_low_vram: true
-    enable_cpu_offload: true
+  # Stable Diffusion 1.5
+  sd15_base:
+    model_id: "runwayml/stable-diffusion-v1-5"
+    type: "sd15"
+    resolution: 512
+    description: "Stable Diffusion 1.5 base model"
+    memory_requirements:
+      minimum_vram_gb: 4
+      recommended_vram_gb: 6
+
+# ControlNet models
+controlnet_models:
+  pose_sdxl:
+    model_id: "thibaud/controlnet-openpose-sdxl-1.0"
+    type: "pose"
+    base_model: "sdxl"
+    description: "OpenPose control for SDXL"
+
+  depth_sdxl:
+    model_id: "diffusers/controlnet-depth-sdxl-1.0"
+    type: "depth"
+    base_model: "sdxl"
+    description: "Depth control for SDXL"
+
+  canny_sdxl:
+    model_id: "diffusers/controlnet-canny-sdxl-1.0"
+    type: "canny"
+    base_model: "sdxl"
+    description: "Canny edge control for SDXL"
+
+  pose_sd15:
+    model_id: "lllyasviel/sd-controlnet-openpose"
+    type: "pose"
+    base_model: "sd15"
+    description: "OpenPose control for SD 1.5"
+
+  depth_sd15:
+    model_id: "lllyasviel/sd-controlnet-depth"
+    type: "depth"
+    base_model: "sd15"
+    description: "Depth control for SD 1.5"
+
+# Embedding models
+embeddings:
+  clip_vit_base:
+    model_id: "openai/clip-vit-base-patch32"
+    description: "CLIP ViT-B/32 for evaluation"
+
+  bge_m3:
+    model_id: "BAAI/bge-m3"
+    description: "BGE M3 multilingual embeddings"
+
+# Safety models
+safety_models:
+  nsfw_detector:
+    model_id: "Falconsai/nsfw_image_detection"
+    description: "NSFW content detection"
+    threshold: 0.5
+
+# Memory optimization settings
+optimization:
+  # Low VRAM settings
+  low_vram:
     enable_attention_slicing: true
-    enable_vae_slicing: true
-    torch_dtype: "float16"
+    enable_cpu_offload: true
+    enable_sequential_offload: false
+    use_8bit: false
+
+  # Medium VRAM settings
+  medium_vram:
+    enable_attention_slicing: true
+    enable_cpu_offload: false
+    enable_sequential_offload: false
+    use_8bit: false
+
+  # High VRAM settings
+  high_vram:
+    enable_attention_slicing: false
+    enable_cpu_offload: false
+    enable_sequential_offload: false
+    use_8bit: false

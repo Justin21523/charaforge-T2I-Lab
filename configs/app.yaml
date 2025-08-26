@@ -1,100 +1,125 @@
-# configs/agent.yaml
-# Agent Tool Registry Configuration
+# configs/app.yaml - Main application configuration
+api:
+  title: "CharaForge T2I Lab"
+  description: "Text-to-Image generation and LoRA fine-tuning API"
+  version: "0.1.0"
+  debug: false
 
-tools:
-  - name: calculator
-    description: "Perform mathematical calculations and evaluate expressions"
-    function: "backend.tools.calculator.calculate"
-    parameters:
-      expression:
-        type: string
-        description: "Mathematical expression to evaluate (e.g., '2 + 3 * sin(pi/4)')"
-        required: true
-    safety_level: safe
+  # Server settings
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
 
-  - name: web_search
-    description: "Search the web for information on a given topic"
-    function: "backend.tools.web_search.search_web"
-    parameters:
-      query:
-        type: string
-        description: "Search query or keywords"
-        required: true
-      max_results:
-        type: integer
-        description: "Maximum number of search results to return"
-        default: 5
-        minimum: 1
-        maximum: 10
-    safety_level: safe
+  # Security
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
 
-  - name: fetch_url
-    description: "Fetch and read content from a web URL"
-    function: "backend.tools.web_search.fetch_url_content"
-    parameters:
-      url:
-        type: string
-        description: "URL to fetch content from"
-        required: true
-      max_length:
-        type: integer
-        description: "Maximum content length to return"
-        default: 1000
-        minimum: 100
-        maximum: 5000
-    safety_level: moderate
+  # Rate limiting
+  rate_limit_enabled: true
+  rate_limit_per_minute: 60
 
-  - name: list_files
-    description: "List files and directories in a specified path"
-    function: "backend.tools.file_operations.list_directory"
-    parameters:
-      path:
-        type: string
-        description: "Directory path to list (relative paths only)"
-        default: "."
-      max_items:
-        type: integer
-        description: "Maximum number of items to return"
-        default: 20
-        minimum: 1
-        maximum: 50
-    safety_level: safe
+  # File upload limits
+  max_file_size_mb: 50
+  allowed_image_types:
+    - "image/jpeg"
+    - "image/png"
+    - "image/webp"
 
-  - name: read_file
-    description: "Read content from a text file"
-    function: "backend.tools.file_operations.read_text_file"
-    parameters:
-      file_path:
-        type: string
-        description: "Path to the text file to read"
-        required: true
-      max_length:
-        type: integer
-        description: "Maximum content length to return"
-        default: 2000
-        minimum: 100
-        maximum: 10000
-    safety_level: moderate
+# Cache and storage
+cache:
+  # AI_CACHE_ROOT will be read from environment
+  default_ttl_hours: 24
+  cleanup_interval_hours: 6
 
-# Agent behavior settings
-agent:
-  max_iterations: 5
-  default_temperature: 0.1
-  timeout_seconds: 30
+  # Subdirectories
+  models_dir: "models"
+  datasets_dir: "datasets"
+  outputs_dir: "outputs"
+  runs_dir: "runs"
 
-  # Safety settings
-  safety:
-    allowed_domains:
-      - "wikipedia.org"
-      - "github.com"
-      - "stackoverflow.com"
-    blocked_domains:
-      - "facebook.com"
-      - "twitter.com"
-    max_tool_calls_per_query: 10
+# Default generation settings
+generation:
+  default_width: 768
+  default_height: 768
+  default_steps: 25
+  default_guidance_scale: 7.5
 
-  # Tool execution limits
-  limits:
-    web_search_daily_limit: 100
-    file_read_daily_limit: 50
-    url_fetch_daily_limit: 20
+  # Limits
+  max_width: 2048
+  max_height: 2048
+  max_steps: 150
+  min_steps: 1
+
+  # Safety
+  safety_check_enabled: true
+  nsfw_threshold: 0.5
+
+  # Watermark
+  watermark_enabled: true
+  watermark_opacity: 0.7
+  watermark_position: "bottom-right"
+
+# Training defaults
+training:
+  # LoRA defaults
+  lora:
+    default_rank: 16
+    default_alpha: 16
+    default_learning_rate: 0.0001
+    default_batch_size: 1
+    default_gradient_accumulation: 8
+    default_max_steps: 5000
+
+    # Memory optimization
+    mixed_precision: "fp16"
+    gradient_checkpointing: true
+    use_8bit_optimizer: false
+
+    # Validation
+    validation_steps: 500
+    save_steps: 500
+
+  # DreamBooth defaults (placeholder)
+  dreambooth:
+    enabled: false
+    default_learning_rate: 0.000002
+    prior_preservation: true
+
+# Worker configuration
+workers:
+  # Queue settings
+  default_queue: "generation"
+  training_queue: "training"
+  batch_queue: "batch"
+
+  # Task limits
+  task_soft_time_limit: 3600 # 1 hour
+  task_hard_time_limit: 7200 # 2 hours
+  max_tasks_per_child: 3
+
+  # Retry policy
+  max_retries: 3
+  retry_delay: 60
+
+# Monitoring and logging
+monitoring:
+  enabled: true
+  log_level: "INFO"
+  log_file: "logs/charaforge.log"
+
+  # Metrics
+  collect_metrics: true
+  metrics_retention_days: 30
+
+  # Health checks
+  health_check_interval: 300 # 5 minutes
+
+# Features flags
+features:
+  controlnet_enabled: true
+  lora_training_enabled: true
+  dreambooth_training_enabled: false
+  batch_processing_enabled: true
+  safety_checks_enabled: true
+  watermarking_enabled: true

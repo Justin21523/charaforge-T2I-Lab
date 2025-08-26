@@ -1,0 +1,56 @@
+# configs/train/lora_sd15.yaml - SD 1.5 LoRA training template
+# LoRA Training Configuration for SD 1.5
+
+# Model settings
+base_model: "runwayml/stable-diffusion-v1-5"
+model_type: "sd15"
+resolution: 512
+
+# LoRA settings
+rank: 32 # Higher rank for SD 1.5
+lora_alpha: 32
+lora_dropout: 0.1
+target_modules:
+  - "to_k"
+  - "to_q"
+  - "to_v"
+  - "to_out.0"
+
+# Training hyperparameters
+learning_rate: 0.0001
+train_batch_size: 2 # Can use larger batch for SD 1.5
+gradient_accumulation_steps: 4
+max_train_steps: 3000
+num_epochs: 8
+
+# Optimizer settings
+optimizer: "adamw"
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.01
+
+# Learning rate scheduler
+lr_scheduler: "constant"
+lr_warmup_steps: 100
+
+# Memory optimization
+mixed_precision: "fp16"
+gradient_checkpointing: true
+use_8bit_optimizer: true # Can use 8bit for SD 1.5
+max_grad_norm: 1.0
+
+# Validation and checkpointing
+validation_steps: 250
+checkpointing_steps: 250
+validation_prompts:
+  - "anime character with distinctive features"
+  - "portrait in different lighting"
+  - "character in various poses"
+
+# Data settings
+caption_column: "caption"
+image_column: "image_path"
+caption_dropout: 0.05
+
+# Reproducibility
+seed: 42

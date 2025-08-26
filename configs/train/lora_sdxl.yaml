@@ -1,0 +1,70 @@
+# configs/train/lora_sdxl.yaml - SDXL LoRA training template
+# LoRA Training Configuration for SDXL
+
+# Model settings
+base_model: "stabilityai/stable-diffusion-xl-base-1.0"
+model_type: "sdxl"
+resolution: 1024
+
+# LoRA settings
+rank: 16
+lora_alpha: 16
+lora_dropout: 0.1
+target_modules:
+  - "to_k"
+  - "to_q"
+  - "to_v"
+  - "to_out.0"
+  - "proj_in"
+  - "proj_out"
+  - "ff.net.0.proj"
+  - "ff.net.2"
+
+# Training hyperparameters
+learning_rate: 0.0001
+train_batch_size: 1
+gradient_accumulation_steps: 8
+max_train_steps: 5000
+num_epochs: 10
+
+# Optimizer settings
+optimizer: "adamw"
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.01
+adam_epsilon: 1e-8
+
+# Learning rate scheduler
+lr_scheduler: "cosine"
+lr_warmup_steps: 100
+
+# Memory optimization
+mixed_precision: "fp16"
+gradient_checkpointing: true
+use_8bit_optimizer: false
+max_grad_norm: 1.0
+
+# Loss settings
+snr_gamma: 5.0 # SNR weighting for stable training
+
+# Validation and checkpointing
+validation_steps: 500
+checkpointing_steps: 500
+validation_prompts:
+  - "anime girl with blue hair in school uniform"
+  - "portrait of character with gentle smile"
+  - "character in casual clothing, outdoors"
+
+# Data settings
+caption_column: "caption"
+image_column: "image_path"
+max_samples: null # Use all available samples
+caption_dropout: 0.1
+
+# Output settings
+sample_every_n_epochs: 2
+save_model_as_safetensors: true
+push_to_hub: false
+
+# Reproducibility
+seed: 42

@@ -1,0 +1,64 @@
+# configs/presets/anime_style.yaml - Anime style preset
+# Anime Style Preset
+
+name: "anime_style"
+description: "Optimized settings for anime character generation"
+version: "1.0"
+
+# Base model preference
+preferred_models:
+  - "stabilityai/stable-diffusion-xl-base-1.0"
+  - "runwayml/stable-diffusion-v1-5"
+
+# Generation settings
+generation:
+  width: 768
+  height: 768
+  steps: 28
+  guidance_scale: 7.0
+  scheduler: "euler"
+
+# Prompt templates
+prompt_templates:
+  character_portrait: |
+    {character_description}, anime style, high quality, detailed,
+    clean lineart, vibrant colors, professional illustration
+
+  full_body: |
+    {character_description}, full body, anime style, standing pose,
+    detailed clothing, clean background, high quality illustration
+
+  close_up: |
+    {character_description}, close-up portrait, anime style,
+    detailed face, expressive eyes, high quality
+
+# Negative prompt
+negative_prompt: |
+  lowres, bad anatomy, bad hands, text, error, missing fingers,
+  extra digit, fewer digits, cropped, worst quality, low quality,
+  normal quality, jpeg artifacts, signature, watermark, username,
+  blurry, extra limbs, extra arms, extra legs, malformed limbs
+
+# Recommended LoRA settings for anime
+lora_training:
+  rank: 16
+  alpha: 16
+  learning_rate: 0.0001
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+# Safety settings
+safety:
+  nsfw_threshold: 0.3  # Stricter for anime content
+  enable_face_detection: true
+
+# Watermark settings
+watermark:
+  enabled: true
+  template: "simple"
+  opacity: 0.1
+  position: "bottom-right"
+'''
