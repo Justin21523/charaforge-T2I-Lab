@@ -1,0 +1,184 @@
+/* frontend/react_app/src/styles/components/Training.css */
+.training-monitor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.training-content {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: var(--spacing-lg);
+  height: calc(100vh - 180px);
+}
+
+.training-controls {
+  background: var(--color-white);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-lg);
+  border: 1px solid var(--color-gray-200);
+  overflow-y: auto;
+}
+
+.training-monitor-panel {
+  background: var(--color-white);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-lg);
+  border: 1px solid var(--color-gray-200);
+  overflow-y: auto;
+}
+
+.preset-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.preset-button {
+  padding: var(--spacing-sm);
+  border: 2px solid var(--color-gray-200);
+  background: var(--color-white);
+  border-radius: var(--border-radius-md);
+  cursor: pointer;
+  text-align: center;
+  transition: all var(--transition-fast);
+}
+
+.preset-button.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-light);
+}
+
+.preset-button:hover:not(.active) {
+  border-color: var(--color-gray-300);
+  background: var(--color-gray-50);
+}
+
+.preset-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.preset-description {
+  font-size: var(--font-size-xs);
+  color: var(--color-gray-600);
+  margin: 0;
+}
+
+.training-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-sm);
+}
+
+.training-jobs {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--border-radius-md);
+}
+
+.training-job-item {
+  padding: var(--spacing-md);
+  border-bottom: 1px solid var(--color-gray-200);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.training-job-item:last-child {
+  border-bottom: none;
+}
+
+.training-job-item:hover {
+  background: var(--color-gray-50);
+}
+
+.training-job-item.selected {
+  background: var(--color-primary-light);
+}
+
+.job-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-xs);
+}
+
+.job-name {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin: 0;
+}
+
+.job-progress {
+  font-size: var(--font-size-xs);
+  color: var(--color-gray-600);
+}
+
+.metrics-chart {
+  width: 100%;
+  height: 300px;
+  margin: var(--spacing-md) 0;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.metric-card {
+  background: var(--color-gray-50);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-md);
+  text-align: center;
+  border: 1px solid var(--color-gray-200);
+}
+
+.metric-value {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-primary);
+  margin: 0;
+}
+
+.metric-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-gray-600);
+  margin: var(--spacing-xs) 0 0 0;
+}
+
+@media (max-width: 1200px) {
+  .training-content {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: auto;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-selector {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  }
+}

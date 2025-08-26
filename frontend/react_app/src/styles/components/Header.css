@@ -1,0 +1,107 @@
+/* frontend/react_app/src/styles/components/Header.css */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--color-white);
+  border-bottom: 1px solid var(--color-gray-200);
+  box-shadow: var(--shadow-sm);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  text-decoration: none;
+  color: var(--color-gray-900);
+  font-weight: 600;
+  font-size: var(--font-size-lg);
+  transition: color var(--transition-fast);
+}
+
+.logo:hover {
+  color: var(--color-primary);
+}
+
+.logo-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--color-primary);
+}
+
+.logo-text {
+  font-weight: 700;
+}
+
+.header-center {
+  flex: 1;
+  text-align: center;
+}
+
+.page-title {
+  font-size: var(--font-size-lg);
+  font-weight: 500;
+  color: var(--color-gray-600);
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+.api-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-md);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  font-size: var(--font-size-xs);
+}
+
+.api-status:hover {
+  background-color: var(--color-gray-100);
+}
+
+.status-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.status-icon.connected {
+  color: var(--color-success);
+}
+
+.status-icon.disconnected {
+  color: var(--color-danger);
+}
+
+.status-text.connected {
+  color: var(--color-success);
+}
+
+.status-text.disconnected {
+  color: var(--color-danger);
+}
+
+@media (max-width: 768px) {
+  .header {
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  .page-title {
+    display: none;
+  }
+
+  .status-text {
+    display: none;
+  }
+}

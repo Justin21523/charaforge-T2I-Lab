@@ -1,0 +1,196 @@
+/* frontend/react_app/src/styles/components/Batch.css */
+.batch-processor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.batch-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-lg);
+  height: calc(100vh - 180px);
+}
+
+.batch-section {
+  background: var(--color-white);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-lg);
+  border: 1px solid var(--color-gray-200);
+  overflow-y: auto;
+}
+
+.batch-tabs {
+  border-bottom: 1px solid var(--color-gray-200);
+  margin-bottom: var(--spacing-lg);
+}
+
+.tab-buttons {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.tab-button {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--border-radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-gray-600);
+  transition: all var(--transition-fast);
+}
+
+.tab-button.active {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.tab-button:hover:not(.active) {
+  background: var(--color-gray-100);
+  color: var(--color-gray-900);
+}
+
+.file-upload-area {
+  border: 2px dashed var(--color-gray-300);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-xl);
+  text-align: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.upload-instructions {
+  background: var(--color-gray-50);
+  border-radius: var(--border-radius-md);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+.upload-instructions h4 {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin: 0 0 var(--spacing-sm) 0;
+}
+
+.upload-instructions pre {
+  background: var(--color-gray-100);
+  padding: var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--font-size-xs);
+  overflow-x: auto;
+}
+
+.manual-config {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-md);
+}
+
+.job-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--border-radius-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.job-item {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-gray-200);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.job-item:last-child {
+  border-bottom: none;
+}
+
+.job-item:hover {
+  background: var(--color-gray-50);
+}
+
+.job-item.selected {
+  background: var(--color-primary-light);
+}
+
+.job-status {
+  display: inline-block;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.job-status.pending {
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.job-status.running {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.job-status.completed {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.job-status.failed {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--color-gray-200);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: var(--spacing-sm) 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  transition: width var(--transition-normal);
+}
+
+.results-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--spacing-md);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.result-image {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--border-radius-md);
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.result-image:hover {
+  transform: scale(1.05);
+}
+
+@media (max-width: 1200px) {
+  .batch-content {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    height: auto;
+  }
+
+  .manual-config {
+    grid-template-columns: 1fr;
+  }
+
+  .results-gallery {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  }
+}

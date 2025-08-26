@@ -1,0 +1,108 @@
+/* frontend/react_app/src/styles/components/Sidebar.css */
+.sidebar {
+  width: 280px;
+  background: var(--color-white);
+  border-right: 1px solid var(--color-gray-200);
+  box-shadow: var(--shadow-sm);
+  overflow-y: auto;
+}
+
+.sidebar-nav {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md);
+  border-radius: var(--border-radius-lg);
+  text-decoration: none;
+  color: var(--color-gray-700);
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.nav-item:hover {
+  background-color: var(--color-gray-50);
+  color: var(--color-gray-900);
+}
+
+.nav-item.active {
+  background-color: var(--color-primary-light);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.nav-item-content {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  flex: 1;
+}
+
+.nav-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.nav-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.nav-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.nav-description {
+  font-size: var(--font-size-xs);
+  color: var(--color-gray-500);
+  line-height: 1.2;
+}
+
+.nav-item.active .nav-description {
+  color: var(--color-primary);
+  opacity: 0.8;
+}
+
+.nav-arrow {
+  width: 16px;
+  height: 16px;
+  opacity: 0.7;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--color-gray-200);
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: var(--spacing-sm);
+  }
+
+  .nav-item {
+    flex-shrink: 0;
+    min-width: 120px;
+    padding: var(--spacing-sm);
+  }
+
+  .nav-description {
+    display: none;
+  }
+
+  .nav-arrow {
+    display: none;
+  }
+}

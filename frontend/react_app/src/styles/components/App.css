@@ -1,0 +1,5 @@
+/* frontend/react_app/src/components/App.css */
+.App {
+  min-height: 100vh;
+  background: var(--color-gray-50);
+}
