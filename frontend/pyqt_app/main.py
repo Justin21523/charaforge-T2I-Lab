@@ -1,154 +1,78 @@
 # frontend/pyqt_app/main.py
+"""
+SagaForge T2I Lab - PyQt Desktop Application
+Main entry point
+"""
 import sys
 import os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon, QFont
-from windows.chat_widget import ChatWidget
-from windows.caption_widget import CaptionWidget
-from windows.vqa_widget import VQAWidget
-from windows.rag_widget import RAGWidget
+from pathlib import Path
+from PyQt5.QtWidgets import QApplication, QStyleFactory, QMessageBox
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon, QPalette, QColor
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from frontend.shared.api_client import SagaForgeAPIClient
+from frontend.pyqt_app.main_window import MainWindow
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.init_ui()
+def setup_dark_theme(app):
+    """Setup dark theme for the application"""
+    app.setStyle(QStyleFactory.create("Fusion"))
 
-    def init_ui(self):
-        """Initialize main window UI"""
-        self.setWindowTitle("CharaForge Multi-Modal Lab")
-        self.setGeometry(100, 100, 800, 600)
+    # Dark palette
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(53, 53, 53))
+    palette.setColor(QPalette.WindowText, Qt.white)
+    palette.setColor(QPalette.Base, QColor(25, 25, 25))
+    palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+    palette.setColor(QPalette.ToolTipBase, Qt.white)
+    palette.setColor(QPalette.ToolTipText, Qt.white)
+    palette.setColor(QPalette.Text, Qt.white)
+    palette.setColor(QPalette.Button, QColor(53, 53, 53))
+    palette.setColor(QPalette.ButtonText, Qt.white)
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Link, QColor(42, 130, 218))
+    palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.HighlightedText, Qt.black)
 
-        # Set application icon (if available)
-        try:
-            icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.png")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-        except:
-            pass
-
-        # Create central widget with tabs
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-
-        layout = QVBoxLayout(central_widget)
-
-        # Create tab widget
-        self.tab_widget = QTabWidget()
-        layout.addWidget(self.tab_widget)
-        central_widget.setLayout(layout)
-
-        # Add chat tab
-        self.chat_widget = ChatWidget()
-        self.tab_widget.addTab(self.chat_widget, "💬 Chat")
-
-        # Create tab widget
-        tabs = QTabWidget()
-        tabs.setTabPosition(QTabWidget.TabPosition.North)
-        tabs.setMovable(True)
-
-        # Add tabs
-        tabs.addTab(CaptionWidget(self.api_base_url), "📷 Caption")
-        tabs.addTab(VQAWidget(self.api_base_url), "❓ VQA")
-        tabs.addTab(ChatWidget(self.api_base_url), "💬 Chat")
-        tabs.addTab(RAGWidget(self.api_base_url), "📚 RAG")  # NEW
-
-        layout.addWidget(tabs)
-
-        # Set window icon (if available)
-        try:
-            self.setWindowIcon(QIcon("icon.png"))
-        except:
-            pass
-
-        # Set default tab
-        self.tab_widget.setCurrentIndex(0)
-
-        # Status bar
-        self.statusBar().showMessage("Ready")
-
-        # Set modern styling
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background-color: #f5f5f5;
-            }
-            QTabWidget::pane {
-                border: 1px solid #ccc;
-                background-color: white;
-            }
-            QTabWidget::tab-bar {
-                alignment: left;
-            }
-            QTabBar::tab {
-                background-color: #e1e1e1;
-                border: 1px solid #ccc;
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-            }
-            QTabBar::tab:selected {
-                background-color: white;
-                border-bottom-color: white;
-            }
-            QTabBar::tab:hover {
-                background-color: #d1d1d1;
-            }
-        """
-        )
-
-    def closeEvent(self, event):
-        """Handle application close"""
-        reply = self.confirm_exit()
-        if reply:
-            event.accept()
-        else:
-            event.ignore()
-
-    def confirm_exit(self):
-        """Confirm application exit"""
-        from PyQt6.QtWidgets import QMessageBox
-
-        reply = QMessageBox.question(
-            self,
-            "Exit Application",
-            "Are you sure you want to exit?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        return reply == QMessageBox.StandardButton.Yes
+    app.setPalette(palette)
 
 
 def main():
     """Main application entry point"""
-    # Set high DPI attributes
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
-
     app = QApplication(sys.argv)
+    app.setApplicationName("SagaForge T2I Lab")
+    app.setApplicationVersion("1.0.0")
+    app.setOrganizationName("SagaForge")
 
-    # Set application properties
-    app.setApplicationName("CharaForge Multi-Modal Lab")
-    app.setApplicationVersion("0.3.0")
-    app.setOrganizationName("CharaForge")
+    # Set application icon
+    icon_path = Path(__file__).parent / "resources" / "icons" / "app_icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
-    # Set default font
-    font = QFont("Arial", 10)
-    app.setFont(font)
+    # Setup dark theme
+    setup_dark_theme(app)
+
+    # Test API connection
+    api_client = SagaForgeAPIClient()
+    health = api_client.health_check()
+
+    if health.get("status") == "error":
+        QMessageBox.warning(
+            None,
+            "連線警告",
+            f"無法連接到 API 服務器:\n{health.get('message', 'Unknown error')}\n\n"
+            "請確保 API 服務器正在運行 (python -m api.main)",
+        )
 
     # Create and show main window
-    window = MainWindow()
-    window.show()
+    main_window = MainWindow(api_client)
+    main_window.show()
 
-    # Run application
-    sys.exit(app.exec())
+    return app.exec_()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
