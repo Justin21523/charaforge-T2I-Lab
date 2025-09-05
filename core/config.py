@@ -1,7 +1,7 @@
 # core/config.py - Unified Configuration Management
 """
-統一配置管理系統
-整合環境變數、YAML 設定檔、共用倉儲路徑管理
+統一設定管理系統 - 支援 .env + configs/*.yaml
+確保所有模組使用一致的設定與路徑管理
 """
 
 import os
@@ -10,389 +10,567 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
-from pydantic import BaseModel, Field
+from functools import lru_cache
+import pydantic
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ===== Path Configuration Objects =====
 
+
+@dataclass(frozen=True)
 class CachePaths:
-    """標準化共用倉儲路徑管理"""
+    """Shared cache directory paths"""
 
-    def __init__(self, cache_root: str):
-        self.root = Path(cache_root)
+    root: Path
+    models: Path
+    datasets: Path
+    outputs: Path
+    cache: Path
+    runs: Path
 
-        # 主要分類目錄
-        self.models = self.root / "models"
-        self.datasets = self.root / "datasets"
-        self.cache = self.root / "cache"
-        self.runs = self.root / "runs"
-        self.outputs = self.root / "outputs"
+    # AI Framework cache paths
+    hf_home: Path
+    torch_home: Path
+    hf_hub: Path
+    transformers: Path
 
-        # Model 子目錄 (T2I 專用)
-        self.models_sd = self.models / "sd"
-        self.models_sdxl = self.models / "sdxl"
-        self.models_controlnet = self.models / "controlnet"
-        self.models_lora = self.models / "lora"
-        self.models_ipadapter = self.models / "ipadapter"
+    @classmethod
+    def from_root(cls, cache_root: str) -> "CachePaths":
+        """Create cache paths from root directory"""
+        root = Path(cache_root).resolve()
 
-        # 多模態擴展
-        self.models_llm = self.models / "llm"
-        self.models_vlm = self.models / "vlm"
-        self.models_embedding = self.models / "embedding"
-        self.models_safety = self.models / "safety"
-        self.models_tts = self.models / "tts"
-        self.models_enhancement = self.models / "enhancement"
+        return cls(
+            root=root,
+            models=root / "models",
+            datasets=root / "datasets",
+            outputs=root / "outputs",
+            cache=root / "cache",
+            runs=root / "runs",
+            hf_home=root / "cache" / "hf",
+            torch_home=root / "cache" / "torch",
+            hf_hub=root / "cache" / "hf" / "hub",
+            transformers=root / "cache" / "hf" / "transformers",
+        )
 
-        # 確保目錄存在
-        self._ensure_dirs()
-
-    def _ensure_dirs(self):
-        """建立所有必要目錄"""
-        dirs = [
-            # 主要目錄
+    def create_all(self) -> None:
+        """Create all cache directories"""
+        for path in [
             self.models,
             self.datasets,
+            self.outputs,
             self.cache,
             self.runs,
-            self.outputs,
-            # T2I 模型目錄
-            self.models_sd,
-            self.models_sdxl,
-            self.models_controlnet,
-            self.models_lora,
-            self.models_ipadapter,
-            # 多模態模型目錄
-            self.models_llm,
-            self.models_vlm,
-            self.models_embedding,
-            self.models_safety,
-            self.models_tts,
-            self.models_enhancement,
-            # 資料目錄
-            self.datasets / "raw",
-            self.datasets / "processed",
-            self.datasets / "metadata",
-            # 輸出目錄
-            self.outputs / "t2i",
-            self.outputs / "training",
-            self.outputs / "batch",
-            # HF 快取目錄
-            self.cache / "hf" / "transformers",
-            self.cache / "hf" / "datasets",
-            self.cache / "hf" / "hub",
-            self.cache / "torch",
-        ]
-
-        for d in dirs:
-            d.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"Warehouse initialized: {self.root}")
+            self.hf_home,
+            self.torch_home,
+            self.hf_hub,
+            self.transformers,
+        ]:
+            path.mkdir(parents=True, exist_ok=True)
 
 
-class Settings(BaseSettings):
-    """主要應用程式設定"""
+@dataclass(frozen=True)
+class AppPaths:
+    """Application specific directory paths"""
 
-    # === 快取與路徑 ===
-    ai_cache_root: str = Field(default="../ai_warehouse/cache", env="AI_CACHE_ROOT")
+    root: Path
+    configs: Path
 
-    # === API 設定 ===
-    api_host: str = Field(default="0.0.0.0", env="API_HOST")
-    api_port: int = Field(default=8000, env="API_PORT")
-    api_cors_origins: str = Field(
-        default="http://localhost:3000", env="API_CORS_ORIGINS"
-    )
-    debug: bool = Field(default=False, env="DEBUG")
+    # Model specific paths
+    models_sd15: Path
+    models_sdxl: Path
+    models_controlnet: Path
+    lora_weights: Path
+    embeddings: Path
 
-    # === GPU/CUDA 設定 ===
-    cuda_visible_devices: str = Field(default="0", env="CUDA_VISIBLE_DEVICES")
-    device_map: str = Field(default="auto", env="DEVICE_MAP")
-    torch_dtype: str = Field(default="float16", env="TORCH_DTYPE")
-    use_4bit_loading: bool = Field(default=True, env="USE_4BIT")
-    enable_cpu_offload: bool = Field(default=True, env="CPU_OFFLOAD")
+    # Data paths
+    datasets_raw: Path
+    datasets_processed: Path
+    training_runs: Path
+    exports: Path
 
-    # === Redis/Celery ===
-    redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
-    celery_broker_url: str = Field(
-        default="redis://localhost:6379/0", env="CELERY_BROKER_URL"
-    )
-    celery_result_backend: str = Field(
-        default="redis://localhost:6379/0", env="CELERY_RESULT_BACKEND"
-    )
+    @classmethod
+    def from_cache_paths(
+        cls, cache_paths: CachePaths, project_root: Optional[Path] = None
+    ) -> "AppPaths":
+        """Create app paths from cache paths"""
+        if project_root is None:
+            project_root = Path(__file__).parent.parent
 
-    # === 安全設定 ===
-    enable_nsfw_filter: bool = Field(default=True, env="ENABLE_NSFW_FILTER")
-    enable_watermark: bool = Field(default=True, env="ENABLE_WATERMARK")
-    blocked_terms: str = Field(default="", env="BLOCKED_TERMS")
+        return cls(
+            root=project_root,
+            configs=project_root / "configs",
+            # Model paths
+            models_sd15=cache_paths.models / "sd15",
+            models_sdxl=cache_paths.models / "sdxl",
+            models_controlnet=cache_paths.models / "controlnet",
+            lora_weights=cache_paths.models / "lora",
+            embeddings=cache_paths.models / "embeddings",
+            # Data paths
+            datasets_raw=cache_paths.datasets / "raw",
+            datasets_processed=cache_paths.datasets / "processed",
+            training_runs=cache_paths.runs / "training",
+            exports=cache_paths.outputs / "exports",
+        )
 
-    # === 效能設定 ===
-    max_workers: int = Field(default=2, env="MAX_WORKERS")
-    max_batch_size: int = Field(default=4, env="MAX_BATCH_SIZE")
-    enable_xformers: bool = Field(default=True, env="ENABLE_XFORMERS")
-    enable_attention_slicing: bool = Field(default=True, env="ATTENTION_SLICING")
 
-    def setup_hf_cache(self):
-        """設定 HuggingFace 快取環境變數"""
-        cache_paths = self.get_cache_paths()
-        hf_cache = cache_paths.cache / "hf"
+# ===== Pydantic Settings Classes =====
 
-        env_vars = {
-            "HF_HOME": str(hf_cache),
-            "TRANSFORMERS_CACHE": str(hf_cache / "transformers"),
-            "HF_DATASETS_CACHE": str(hf_cache / "datasets"),
-            "HUGGINGFACE_HUB_CACHE": str(hf_cache / "hub"),
-            "TORCH_HOME": str(cache_paths.cache / "torch"),
+
+class ModelConfig(BaseSettings):
+    """Model configuration settings"""
+
+    # Default models
+    default_sd15_model: str = Field(default="runwayml/stable-diffusion-v1-5")
+    default_sdxl_model: str = Field(default="stabilityai/stable-diffusion-xl-base-1.0")
+    default_vae: Optional[str] = Field(default=None)
+
+    # Generation defaults
+    default_steps: int = Field(default=20, ge=1, le=150)
+    default_guidance_scale: float = Field(default=7.5, ge=1.0, le=20.0)
+    default_width: int = Field(default=512, ge=256, le=2048)
+    default_height: int = Field(default=512, ge=256, le=2048)
+
+    # Performance settings
+    enable_xformers: bool = Field(default=True)
+    enable_cpu_offload: bool = Field(default=False)
+    low_vram_mode: bool = Field(default=False)
+    use_fp16: bool = Field(default=True)
+    use_bf16: bool = Field(default=False)
+
+    class Config:
+        env_prefix = "MODEL_"
+
+
+class TrainingConfig(BaseSettings):
+    """Training configuration settings"""
+
+    # LoRA defaults
+    lora_rank: int = Field(default=16, ge=4, le=128)
+    lora_alpha: int = Field(default=32, ge=8, le=256)
+    lora_dropout: float = Field(default=0.1, ge=0.0, le=0.5)
+
+    # Training hyperparameters
+    learning_rate: float = Field(default=1e-4, ge=1e-6, le=1e-2)
+    train_batch_size: int = Field(default=1, ge=1, le=8)
+    num_train_epochs: int = Field(default=10, ge=1, le=1000)
+    max_train_steps: Optional[int] = Field(default=None)
+
+    # Optimization
+    gradient_accumulation_steps: int = Field(default=1, ge=1)
+    gradient_checkpointing: bool = Field(default=True)
+    mixed_precision: str = Field(default="fp16", pattern="^(no|fp16|bf16)$")
+
+    # Validation
+    validation_steps: int = Field(default=100, ge=10)
+    save_steps: int = Field(default=500, ge=50)
+
+    class Config:
+        env_prefix = "TRAIN_"
+
+
+class APIConfig(BaseSettings):
+    """API configuration settings"""
+
+    # Server settings
+    host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8000, ge=1000, le=65535)
+    workers: int = Field(default=1, ge=1, le=16)
+
+    # CORS and security
+    cors_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000")
+    api_key: Optional[str] = Field(default=None)
+    rate_limit: int = Field(default=100, ge=1)  # requests per minute
+
+    # File uploads
+    max_file_size_mb: int = Field(default=50, ge=1, le=500)
+    allowed_extensions: str = Field(default=".jpg,.jpeg,.png,.webp")
+
+    # Generation limits
+    max_batch_size: int = Field(default=4, ge=1, le=16)
+    max_steps: int = Field(default=150, ge=10, le=500)
+
+    class Config:
+        env_prefix = "API_"
+
+
+class CeleryConfig(BaseSettings):
+    """Celery worker configuration"""
+
+    broker_url: str = Field(default="redis://localhost:6379/0")
+    result_backend: str = Field(default="redis://localhost:6379/0")
+
+    # Worker settings
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
+    worker_prefetch_multiplier: int = Field(default=1, ge=1)
+    task_soft_time_limit: int = Field(default=3600)  # 1 hour
+    task_time_limit: int = Field(default=7200)  # 2 hours
+
+    # Queue settings
+    task_routes: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "workers.tasks.training.*": "training",
+            "workers.tasks.generation.*": "generation",
+            "workers.tasks.batch.*": "batch",
         }
+    )
 
-        for k, v in env_vars.items():
-            os.environ[k] = v
-            Path(v).mkdir(parents=True, exist_ok=True)
+    class Config:
+        env_prefix = "CELERY_"
 
-        logger.info("HuggingFace cache environment configured")
 
-    def get_cache_paths(self) -> CachePaths:
-        """取得標準化快取路徑"""
-        return CachePaths(self.ai_cache_root)
+class AppSettings(BaseSettings):
+    """Main application settings"""
 
-    @property
-    def cors_origins_list(self) -> List[str]:
-        return [origin.strip() for origin in self.api_cors_origins.split(",")]
+    # Environment
+    environment: str = Field(
+        default="development", pattern="^(development|staging|production)$"
+    )
+    debug: bool = Field(default=True)
+    log_level: str = Field(
+        default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$"
+    )
 
-    @property
-    def blocked_terms_list(self) -> List[str]:
-        if not self.blocked_terms:
-            return []
-        return [term.strip().lower() for term in self.blocked_terms.split(",")]
+    # Cache configuration
+    ai_cache_root: str = Field(default="../ai_warehouse/cache")
+
+    # Component settings
+    model: ModelConfig = Field(default_factory=ModelConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    api: APIConfig = Field(default_factory=APIConfig)
+    celery: CeleryConfig = Field(default_factory=CeleryConfig)
 
     class Config:
         env_file = ".env"
-        env_file_encoding = "utf-8"
+        env_nested_delimiter = "__"
 
 
-class ConfigManager:
-    """YAML 配置檔案管理器"""
-
-    def __init__(self, config_dir: str = "configs"):
-        self.config_dir = Path(config_dir)
-        self._cache = {}
-        self._ensure_config_dir()
-
-    def _ensure_config_dir(self):
-        """確保配置目錄存在並建立預設檔案"""
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-
-        # 建立預設 app.yaml
-        app_config_file = self.config_dir / "app.yaml"
-        if not app_config_file.exists():
-            self._create_default_app_config(app_config_file)
-
-    def _create_default_app_config(self, config_file: Path):
-        """建立預設應用程式配置"""
-        default_config = {
-            "app": {
-                "name": "CharaForge T2I Lab",
-                "version": "0.1.0",
-                "description": "Text-to-Image generation and LoRA fine-tuning lab",
-            },
-            "features": {
-                "enable_t2i": True,
-                "enable_lora": True,
-                "enable_controlnet": True,
-                "enable_safety": True,
-                "enable_watermark": True,
-                "enable_batch": True,
-                "enable_monitoring": True,
-            },
-            "limits": {
-                "max_image_size": 2048,
-                "max_batch_size": 50,
-                "max_training_time_hours": 24,
-                "request_timeout_seconds": 300,
-            },
-            "performance": {
-                "low_vram_mode": True,
-                "mixed_precision": True,
-                "gradient_checkpointing": True,
-                "model_cache_size_gb": 10,
-            },
-        }
-
-        with open(config_file, "w", encoding="utf-8") as f:
-            yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
-
-    def load_yaml(self, filename: str) -> Dict[str, Any]:
-        """載入 YAML 配置檔案（含快取）"""
-        if filename in self._cache:
-            return self._cache[filename]
-
-        file_path = self.config_dir / filename
-        if not file_path.exists():
-            logger.warning(f"Config file not found: {file_path}")
-            return {}
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-        except Exception as e:
-            logger.error(f"Failed to load config {file_path}: {e}")
-            return {}
-
-        self._cache[filename] = config
-        return config
-
-    def get_model_config(self, model_name: str) -> Dict[str, Any]:
-        """取得模型配置"""
-        models_config = self.load_yaml("models.yaml")
-        return models_config.get(model_name, {})
-
-    def get_train_config(self, config_name: str) -> Dict[str, Any]:
-        """取得訓練配置"""
-        return self.load_yaml(f"train/{config_name}")
-
-    def get_preset_config(self, preset_name: str) -> Dict[str, Any]:
-        """取得風格預設配置"""
-        return self.load_yaml(f"presets/{preset_name}")
-
-    def get_app_config(self) -> Dict[str, Any]:
-        """取得應用程式配置"""
-        return self.load_yaml("app.yaml")
+# ===== YAML Configuration Loading =====
 
 
-# ===== 全域實例 =====
-settings = Settings()
-config_manager = ConfigManager()
+def load_yaml_config(config_path: Path) -> Dict[str, Any]:
+    """Load YAML configuration file"""
+    if not config_path.exists():
+        logger.warning(f"Config file not found: {config_path}")
+        return {}
 
-# 初始化 HF 快取
-settings.setup_hf_cache()
-
-# 導出快取路徑以便直接使用
-cache_paths = settings.get_cache_paths()
-
-
-# ===== 便利函數 =====
-def get_settings() -> Settings:
-    """取得全域設定實例"""
-    return settings
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.error(f"Failed to load config {config_path}: {e}")
+        return {}
 
 
-def get_config_manager() -> ConfigManager:
-    """取得全域配置管理器實例"""
-    return config_manager
+def load_model_presets(configs_dir: Path) -> Dict[str, Any]:
+    """Load model preset configurations"""
+    presets = {}
+    presets_dir = configs_dir / "presets"
+
+    if not presets_dir.exists():
+        return presets
+
+    for preset_file in presets_dir.glob("*.yaml"):
+        preset_name = preset_file.stem
+        presets[preset_name] = load_yaml_config(preset_file)
+
+    return presets
 
 
+def load_training_configs(configs_dir: Path) -> Dict[str, Any]:
+    """Load training configuration templates"""
+    training_configs = {}
+    train_dir = configs_dir / "train"
+
+    if not train_dir.exists():
+        return training_configs
+
+    for config_file in train_dir.glob("*.yaml"):
+        config_name = config_file.stem
+        training_configs[config_name] = load_yaml_config(config_file)
+
+    return training_configs
+
+
+# ===== Global Settings Management =====
+
+_settings_instance: Optional[AppSettings] = None
+_cache_paths_instance: Optional[CachePaths] = None
+_app_paths_instance: Optional[AppPaths] = None
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> AppSettings:
+    """Get global application settings (cached)"""
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = AppSettings()
+
+        # Setup logging level
+        logging.getLogger().setLevel(_settings_instance.log_level)
+
+        logger.info(f"Settings loaded - Environment: {_settings_instance.environment}")
+
+    return _settings_instance
+
+
+@lru_cache(maxsize=1)
 def get_cache_paths() -> CachePaths:
-    """取得全域快取路徑實例"""
-    return cache_paths
+    """Get cache directory paths (cached)"""
+    global _cache_paths_instance
+    if _cache_paths_instance is None:
+        settings = get_settings()
+        _cache_paths_instance = CachePaths.from_root(settings.ai_cache_root)
+        _cache_paths_instance.create_all()
+
+        logger.info(f"Cache paths initialized: {_cache_paths_instance.root}")
+
+    return _cache_paths_instance
 
 
-def get_model_path(model_type: str, model_name: str) -> Path:
-    """取得標準化模型路徑"""
-    paths = get_cache_paths()
+@lru_cache(maxsize=1)
+def get_app_paths() -> AppPaths:
+    """Get application directory paths (cached)"""
+    global _app_paths_instance
+    if _app_paths_instance is None:
+        cache_paths = get_cache_paths()
+        _app_paths_instance = AppPaths.from_cache_paths(cache_paths)
 
-    model_dirs = {
-        "sd": paths.models_sd,
-        "sdxl": paths.models_sdxl,
-        "controlnet": paths.models_controlnet,
-        "lora": paths.models_lora,
-        "ipadapter": paths.models_ipadapter,
-        "llm": paths.models_llm,
-        "vlm": paths.models_vlm,
-        "embedding": paths.models_embedding,
-        "safety": paths.models_safety,
+        # Create app directories
+        for path in [
+            _app_paths_instance.configs,
+            _app_paths_instance.models_sd15,
+            _app_paths_instance.models_sdxl,
+            _app_paths_instance.models_controlnet,
+            _app_paths_instance.lora_weights,
+            _app_paths_instance.embeddings,
+            _app_paths_instance.datasets_raw,
+            _app_paths_instance.datasets_processed,
+            _app_paths_instance.training_runs,
+            _app_paths_instance.exports,
+        ]:
+            path.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"App paths initialized: {_app_paths_instance.root}")
+
+    return _app_paths_instance
+
+
+def get_model_config(model_name: Optional[str] = None) -> Dict[str, Any]:
+    """Get model configuration with optional preset override"""
+    settings = get_settings()
+    app_paths = get_app_paths()
+
+    # Load base model config
+    config = settings.model.dict()
+
+    # Load presets
+    presets = load_model_presets(app_paths.configs)
+
+    # Apply specific preset if requested
+    if model_name and model_name in presets:
+        config.update(presets[model_name])
+
+    return config
+
+
+def get_training_config(config_name: Optional[str] = None) -> Dict[str, Any]:
+    """Get training configuration with optional template override"""
+    settings = get_settings()
+    app_paths = get_app_paths()
+
+    # Load base training config
+    config = settings.training.dict()
+
+    # Load training templates
+    templates = load_training_configs(app_paths.configs)
+
+    # Apply specific template if requested
+    if config_name and config_name in templates:
+        config.update(templates[config_name])
+
+    return config
+
+
+def setup_environment_variables() -> None:
+    """Setup AI framework environment variables"""
+    cache_paths = get_cache_paths()
+
+    env_vars = {
+        "HF_HOME": str(cache_paths.hf_home),
+        "TRANSFORMERS_CACHE": str(cache_paths.transformers),
+        "HF_HUB_CACHE": str(cache_paths.hf_hub),
+        "TORCH_HOME": str(cache_paths.torch_home),
+        "PYTORCH_KERNEL_CACHE_PATH": str(cache_paths.torch_home / "kernels"),
     }
 
-    if model_type not in model_dirs:
-        raise ValueError(f"Unknown model type: {model_type}")
+    for key, value in env_vars.items():
+        os.environ[key] = value
+        Path(value).mkdir(parents=True, exist_ok=True)
 
-    return model_dirs[model_type] / model_name
-
-
-def get_run_output_dir(run_id: str) -> Path:
-    """取得訓練執行輸出目錄"""
-    paths = get_cache_paths()
-    run_dir = paths.runs / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
+    logger.info("AI framework environment variables configured")
 
 
-def get_dataset_path(dataset_name: str) -> Path:
-    """取得資料集目錄路徑"""
-    paths = get_cache_paths()
-    return paths.datasets / dataset_name
-
-
-def get_output_path(output_type: str = "t2i") -> Path:
-    """取得輸出目錄路徑"""
-    paths = get_cache_paths()
-    output_dir = paths.outputs / output_type
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-# ===== 快取初始化驗證 =====
 def validate_cache_setup() -> Dict[str, Any]:
-    """驗證快取設定是否正確"""
-    try:
-        paths = get_cache_paths()
+    """Validate cache directory setup and permissions"""
+    cache_paths = get_cache_paths()
+    validation_results = {
+        "status": "healthy",
+        "errors": [],
+        "warnings": [],
+        "paths_checked": [],
+    }
 
-        validation = {
-            "cache_root_exists": paths.root.exists(),
-            "hf_cache_configured": bool(os.environ.get("HF_HOME")),
-            "torch_cache_configured": bool(os.environ.get("TORCH_HOME")),
-            "gpu_available": False,
-            "directories_created": True,
+    # Check all required paths
+    required_paths = [
+        cache_paths.root,
+        cache_paths.models,
+        cache_paths.datasets,
+        cache_paths.outputs,
+        cache_paths.cache,
+        cache_paths.runs,
+    ]
+
+    for path in required_paths:
+        result = {
+            "path": str(path),
+            "exists": path.exists(),
+            "writable": False,
+            "readable": False,
         }
 
-        # 檢查 GPU
-        try:
-            import torch
+        if path.exists():
+            try:
+                # Test write permission
+                test_file = path / ".write_test"
+                test_file.touch()
+                test_file.unlink()
+                result["writable"] = True
+            except Exception:
+                validation_results["errors"].append(f"Cannot write to {path}")
 
-            validation["gpu_available"] = torch.cuda.is_available()
-            if validation["gpu_available"]:
-                validation["gpu_count"] = torch.cuda.device_count()
-                validation["gpu_name"] = torch.cuda.get_device_name(0)
-        except ImportError:
-            logger.warning("PyTorch not available for GPU check")
+            try:
+                # Test read permission
+                list(path.iterdir())
+                result["readable"] = True
+            except Exception:
+                validation_results["errors"].append(f"Cannot read from {path}")
+        else:
+            validation_results["errors"].append(f"Path does not exist: {path}")
 
-        # 檢查關鍵目錄
-        required_dirs = [paths.models, paths.datasets, paths.cache, paths.outputs]
-        for directory in required_dirs:
-            if not directory.exists():
-                validation["directories_created"] = False
-                break
+        validation_results["paths_checked"].append(result)
 
-        validation["status"] = (
-            "healthy"
-            if all(
-                [
-                    validation["cache_root_exists"],
-                    validation["hf_cache_configured"],
-                    validation["directories_created"],
-                ]
+    # Check disk space
+    try:
+        import shutil
+
+        total, used, free = shutil.disk_usage(cache_paths.root)
+        free_gb = free / (1024**3)
+
+        if free_gb < 5.0:  # Less than 5GB free
+            validation_results["warnings"].append(
+                f"Low disk space: {free_gb:.1f}GB free"
             )
-            else "degraded"
-        )
-
-        return validation
+        elif free_gb < 1.0:  # Less than 1GB free
+            validation_results["errors"].append(
+                f"Very low disk space: {free_gb:.1f}GB free"
+            )
 
     except Exception as e:
-        logger.error(f"Cache validation failed: {e}")
-        return {"status": "failed", "error": str(e)}
+        validation_results["warnings"].append(f"Could not check disk space: {e}")
+
+    # Determine overall status
+    if validation_results["errors"]:
+        validation_results["status"] = "error"
+    elif validation_results["warnings"]:
+        validation_results["status"] = "warning"
+
+    return validation_results
 
 
-if __name__ == "__main__":
-    # 測試配置
-    print("=== CharaForge T2I Lab Configuration ===")
+# ===== Bootstrap Function =====
 
+
+def bootstrap_config(verbose: bool = False) -> Dict[str, Any]:
+    """Bootstrap the entire configuration system"""
+    if verbose:
+        print("🔧 Bootstrapping SagaForge T2I Lab configuration...")
+
+    # Load settings
+    settings = get_settings()
+    cache_paths = get_cache_paths()
+    app_paths = get_app_paths()
+
+    # Setup environment variables
+    setup_environment_variables()
+
+    # Validate setup
     validation = validate_cache_setup()
-    print(f"Cache Status: {validation['status']}")
-    print(f"Cache Root: {cache_paths.root}")
-    print(f"GPU Available: {validation.get('gpu_available', False)}")
 
-    if validation.get("gpu_available"):
-        print(f"GPU: {validation.get('gpu_name', 'Unknown')}")
+    summary = {
+        "settings_loaded": True,
+        "cache_root": str(cache_paths.root),
+        "environment": settings.environment,
+        "debug_mode": settings.debug,
+        "validation": validation,
+        "ai_framework_vars_set": True,
+    }
 
-    app_config = config_manager.get_app_config()
-    print(f"App: {app_config.get('app', {}).get('name', 'Unknown')}")
+    if verbose:
+        print(f"✅ Configuration bootstrap completed")
+        print(f"   Cache root: {cache_paths.root}")
+        print(f"   Environment: {settings.environment}")
+        print(f"   Validation: {validation['status']}")
+
+        if validation["errors"]:
+            print(f"❌ Errors: {len(validation['errors'])}")
+            for error in validation["errors"][:3]:  # Show first 3 errors
+                print(f"   - {error}")
+
+        if validation["warnings"]:
+            print(f"⚠️  Warnings: {len(validation['warnings'])}")
+
+    return summary
+
+
+# ===== Utility Functions =====
+
+
+def reset_settings_cache() -> None:
+    """Reset cached settings (useful for testing)"""
+    global _settings_instance, _cache_paths_instance, _app_paths_instance
+    _settings_instance = None
+    _cache_paths_instance = None
+    _app_paths_instance = None
+
+    # Clear LRU caches
+    get_settings.cache_clear()
+    get_cache_paths.cache_clear()
+    get_app_paths.cache_clear()
+
+
+def get_config_summary() -> Dict[str, Any]:
+    """Get a summary of current configuration"""
+    settings = get_settings()
+    cache_paths = get_cache_paths()
+    app_paths = get_app_paths()
+
+    return {
+        "environment": settings.environment,
+        "debug": settings.debug,
+        "cache_root": str(cache_paths.root),
+        "project_root": str(app_paths.root),
+        "api_host": f"{settings.api.host}:{settings.api.port}",
+        "celery_broker": settings.celery.broker_url,
+        "model_defaults": {
+            "sd15": settings.model.default_sd15_model,
+            "sdxl": settings.model.default_sdxl_model,
+        },
+        "performance": {
+            "low_vram": settings.model.low_vram_mode,
+            "fp16": settings.model.use_fp16,
+            "xformers": settings.model.enable_xformers,
+        },
+    }

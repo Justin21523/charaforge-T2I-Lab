@@ -1,6 +1,6 @@
-# core/shared_cache.py - Shared Model/Data Warehouse Management
+# core/shared_cache.py - Shared Cache Manager (Updated)
 """
-共用模型/資料倉儲管理系統
+共用模型/資料倉儲管理系統 - 與統一配置系統整合
 確保所有模組使用一致的快取目錄結構和環境設定
 """
 
@@ -10,11 +10,20 @@ import hashlib
 import time
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 import threading
 import psutil
+
+# Import unified config system
+from core.config import (
+    get_settings,
+    get_cache_paths,
+    get_app_paths,
+    CachePaths,
+    AppPaths,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +44,36 @@ class CacheStats:
         return self.hits / total if total > 0 else 0.0
 
 
+@dataclass
+class ModelInfo:
+    """模型資訊結構"""
+
+    model_id: str
+    model_type: str  # "sd15", "sdxl", "lora", "controlnet", "embedding"
+    path: Path
+    size_mb: float
+    cached_at: str
+    metadata: Dict[str, Any]
+
+    @property
+    def size_gb(self) -> float:
+        return self.size_mb / 1024
+
+
 class SharedCache:
-    """共用模型與資料倉儲管理器"""
+    """共用模型與資料倉儲管理器 - 整合統一配置系統"""
 
-    def __init__(self, cache_root: Optional[str] = None):
-        self.cache_root = cache_root or os.getenv(
-            "AI_CACHE_ROOT", "../ai_warehouse/cache"
-        )
-        self.cache_root_path = Path(self.cache_root)
+    def __init__(self):
+        # Use unified config system
+        self.settings = get_settings()
+        self.cache_paths = get_cache_paths()
+        self.app_paths = get_app_paths()
 
-        # 記憶體快取
+        # Memory cache
         self._memory_cache: Dict[str, Any] = {}
         self._cache_lock = threading.Lock()
 
-        # 統計資訊
+        # Statistics
         self.stats = {
             "models": CacheStats(),
             "datasets": CacheStats(),
@@ -56,230 +81,206 @@ class SharedCache:
             "memory": CacheStats(),
         }
 
-        self._setup_environment()
-        self._create_app_directories()
+        # Model registry
+        self._model_registry: Dict[str, ModelInfo] = {}
+        self._load_model_registry()
 
-    def _setup_environment(self) -> None:
-        """設定 AI 框架快取環境變數"""
-        # Shared Cache Bootstrap
-        cache_mappings = {
-            "HF_HOME": f"{self.cache_root}/hf",
-            "TRANSFORMERS_CACHE": f"{self.cache_root}/hf/transformers",
-            "HF_DATASETS_CACHE": f"{self.cache_root}/hf/datasets",
-            "HUGGINGFACE_HUB_CACHE": f"{self.cache_root}/hf/hub",
-            "TORCH_HOME": f"{self.cache_root}/torch",
-            "PYTORCH_KERNEL_CACHE_PATH": f"{self.cache_root}/torch/kernels",
-        }
+    def _load_model_registry(self) -> None:
+        """載入模型註冊表"""
+        registry_file = self.app_paths.models_sd15.parent / "registry.json"
 
-        for env_key, cache_path in cache_mappings.items():
-            os.environ[env_key] = cache_path
-            Path(cache_path).mkdir(parents=True, exist_ok=True)
+        if registry_file.exists():
+            try:
+                with open(registry_file, "r", encoding="utf-8") as f:
+                    registry_data = json.load(f)
 
-        logger.info(f"Shared cache environment configured: {self.cache_root}")
+                for model_id, data in registry_data.items():
+                    self._model_registry[model_id] = ModelInfo(
+                        model_id=data["model_id"],
+                        model_type=data["model_type"],
+                        path=Path(data["path"]),
+                        size_mb=data["size_mb"],
+                        cached_at=data["cached_at"],
+                        metadata=data.get("metadata", {}),
+                    )
 
-    def _create_app_directories(self) -> None:
-        """建立應用程式專用目錄結構"""
-        self.app_dirs = {
-            # === T2I 模型目錄 ===
-            "models_sd": self.cache_root_path / "models" / "sd",
-            "models_sdxl": self.cache_root_path / "models" / "sdxl",
-            "models_controlnet": self.cache_root_path / "models" / "controlnet",
-            "models_lora": self.cache_root_path / "models" / "lora",
-            "models_ipadapter": self.cache_root_path / "models" / "ipadapter",
-            # === 多模態模型 ===
-            "models_llm": self.cache_root_path / "models" / "llm",
-            "models_vlm": self.cache_root_path / "models" / "vlm",
-            "models_embedding": self.cache_root_path / "models" / "embedding",
-            "models_safety": self.cache_root_path / "models" / "safety",
-            "models_tts": self.cache_root_path / "models" / "tts",
-            "models_enhancement": self.cache_root_path / "models" / "enhancement",
-            # === 資料集 ===
-            "datasets_raw": self.cache_root_path / "datasets" / "raw",
-            "datasets_processed": self.cache_root_path / "datasets" / "processed",
-            "datasets_metadata": self.cache_root_path / "datasets" / "metadata",
-            # === 輸出 ===
-            "outputs_t2i": self.cache_root_path / "outputs" / "t2i",
-            "outputs_training": self.cache_root_path / "outputs" / "training",
-            "outputs_batch": self.cache_root_path / "outputs" / "batch",
-            "outputs_exports": self.cache_root_path / "outputs" / "exports",
-            # === 執行記錄 ===
-            "runs": self.cache_root_path / "runs",
-            "logs": self.cache_root_path / "logs",
-            # === 註冊表 ===
-            "registry": self.cache_root_path / "registry",
-        }
+                logger.info(f"Loaded {len(self._model_registry)} models from registry")
 
-        # 建立所有目錄
-        for dir_path in self.app_dirs.values():
-            dir_path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Failed to load model registry: {e}")
 
-        logger.info(f"Created {len(self.app_dirs)} application directories")
+    def _save_model_registry(self) -> None:
+        """儲存模型註冊表"""
+        registry_file = self.app_paths.models_sd15.parent / "registry.json"
+        registry_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def get_path(self, key: str) -> Path:
-        """取得目錄路徑"""
-        if key not in self.app_dirs:
-            raise KeyError(f"Unknown cache directory: {key}")
-        return self.app_dirs[key]
-
-    def get_model_path(self, model_type: str, model_name: str) -> Path:
-        """取得標準化模型路徑"""
-        model_dir_key = f"models_{model_type}"
-        if model_dir_key not in self.app_dirs:
-            raise ValueError(f"Unknown model type: {model_type}")
-
-        return self.app_dirs[model_dir_key] / model_name
-
-    def get_dataset_path(self, dataset_type: str, dataset_name: str) -> Path:
-        """取得標準化資料集路徑"""
-        dataset_dir_key = f"datasets_{dataset_type}"
-        if dataset_dir_key not in self.app_dirs:
-            raise ValueError(f"Unknown dataset type: {dataset_type}")
-
-        return self.app_dirs[dataset_dir_key] / dataset_name
-
-    def get_output_path(self, output_type: str, sub_path: str = "") -> Path:
-        """取得輸出目錄路徑"""
-        output_dir_key = f"outputs_{output_type}"
-        if output_dir_key not in self.app_dirs:
-            raise ValueError(f"Unknown output type: {output_type}")
-
-        output_path = self.app_dirs[output_dir_key]
-        if sub_path:
-            output_path = output_path / sub_path
-            output_path.mkdir(parents=True, exist_ok=True)
-
-        return output_path
-
-    def cache_model_info(self, model_key: str, model_info: Dict[str, Any]) -> None:
-        """快取模型資訊"""
         try:
-            cache_info = {
-                **model_info,
-                "cached_at": datetime.now().isoformat(),
-                "cache_key": model_key,
-                "cache_version": "1.0",
-            }
+            registry_data = {}
+            for model_id, info in self._model_registry.items():
+                registry_data[model_id] = {
+                    "model_id": info.model_id,
+                    "model_type": info.model_type,
+                    "path": str(info.path),
+                    "size_mb": info.size_mb,
+                    "cached_at": info.cached_at,
+                    "metadata": info.metadata,
+                }
 
-            # 決定快取檔案位置
-            if "lora" in model_key.lower():
-                cache_dir = self.app_dirs["models_lora"]
-            elif "controlnet" in model_key.lower():
-                cache_dir = self.app_dirs["models_controlnet"]
-            else:
-                cache_dir = self.app_dirs["registry"]
-
-            info_file = cache_dir / f"{model_key}_info.json"
-
-            with open(info_file, "w", encoding="utf-8") as f:
-                json.dump(cache_info, f, indent=2, ensure_ascii=False)
-
-            logger.debug(f"Cached model info: {model_key}")
+            with open(registry_file, "w", encoding="utf-8") as f:
+                json.dump(registry_data, f, indent=2, ensure_ascii=False)
 
         except Exception as e:
-            logger.error(f"Failed to cache model info for {model_key}: {e}")
+            logger.error(f"Failed to save model registry: {e}")
 
-    def get_model_info(self, model_key: str) -> Optional[Dict[str, Any]]:
-        """取得快取的模型資訊"""
-        # 在多個位置搜尋
-        search_dirs = [
-            self.app_dirs["models_lora"],
-            self.app_dirs["models_controlnet"],
-            self.app_dirs["registry"],
-        ]
+    def get_model_path(self, model_type: str, model_name: str) -> Path:
+        """取得模型路徑"""
+        model_paths = {
+            "sd15": self.app_paths.models_sd15,
+            "sdxl": self.app_paths.models_sdxl,
+            "controlnet": self.app_paths.models_controlnet,
+            "lora": self.app_paths.lora_weights,
+            "embedding": self.app_paths.embeddings,
+        }
 
-        for search_dir in search_dirs:
-            info_file = search_dir / f"{model_key}_info.json"
-            if info_file.exists():
-                try:
-                    with open(info_file, "r", encoding="utf-8") as f:
-                        return json.load(f)
-                except Exception as e:
-                    logger.warning(f"Failed to load model info from {info_file}: {e}")
+        if model_type not in model_paths:
+            raise ValueError(f"Unknown model type: {model_type}")
 
-        return None
+        return model_paths[model_type] / model_name
 
-    def set_memory_cache(self, key: str, value: Any, ttl_minutes: int = 60) -> None:
-        """設定記憶體快取（含 TTL）"""
+    def cache_model_info(self, model_id: str, metadata: Dict[str, Any]) -> None:
+        """快取模型資訊"""
         with self._cache_lock:
-            expires_at = datetime.now() + timedelta(minutes=ttl_minutes)
-            self._memory_cache[key] = {
-                "value": value,
-                "expires_at": expires_at,
-                "created_at": datetime.now(),
+            self._memory_cache[f"model_info:{model_id}"] = {
+                "metadata": metadata,
+                "cached_at": datetime.now().isoformat(),
+                "access_count": self._memory_cache.get(
+                    f"model_info:{model_id}", {}
+                ).get("access_count", 0)
+                + 1,
             }
-
             self.stats["memory"].hits += 1
 
-    def get_memory_cache(self, key: str) -> Optional[Any]:
-        """取得記憶體快取值"""
+    def get_cached_model_info(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """取得快取的模型資訊"""
         with self._cache_lock:
-            if key not in self._memory_cache:
-                self.stats["memory"].misses += 1
-                return None
-
-            cache_item = self._memory_cache[key]
-
-            # 檢查是否過期
-            if datetime.now() > cache_item["expires_at"]:
-                del self._memory_cache[key]
-                self.stats["memory"].misses += 1
-                return None
-
-            self.stats["memory"].hits += 1
-            return cache_item["value"]
-
-    def clear_memory_cache(self, pattern: Optional[str] = None) -> int:
-        """清除記憶體快取"""
-        with self._cache_lock:
-            if pattern is None:
-                count = len(self._memory_cache)
-                self._memory_cache.clear()
-                logger.info(f"Cleared all memory cache ({count} items)")
-                return count
+            cache_key = f"model_info:{model_id}"
+            if cache_key in self._memory_cache:
+                self.stats["memory"].hits += 1
+                self._memory_cache[cache_key]["access_count"] += 1
+                return self._memory_cache[cache_key]["metadata"]
             else:
-                # 按模式清除
-                keys_to_remove = [k for k in self._memory_cache.keys() if pattern in k]
-                for key in keys_to_remove:
-                    del self._memory_cache[key]
-                logger.info(
-                    f"Cleared memory cache pattern '{pattern}' ({len(keys_to_remove)} items)"
-                )
-                return len(keys_to_remove)
+                self.stats["memory"].misses += 1
+                return None
 
-    def cleanup_expired_cache(self) -> Dict[str, int]:
-        """清理過期快取"""
-        cleanup_stats = {"memory": 0, "files": 0}
+    def register_model(
+        self,
+        model_id: str,
+        model_type: str,
+        local_path: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """註冊模型到快取系統"""
+        try:
+            local_path = Path(local_path)
+            if not local_path.exists():
+                logger.error(f"Model path does not exist: {local_path}")
+                return False
 
-        # 清理記憶體快取
+            # Calculate model size
+            if local_path.is_file():
+                size_mb = local_path.stat().st_size / (1024 * 1024)
+            else:
+                size_mb = sum(
+                    f.stat().st_size for f in local_path.rglob("*") if f.is_file()
+                ) / (1024 * 1024)
+
+            # Create model info
+            model_info = ModelInfo(
+                model_id=model_id,
+                model_type=model_type,
+                path=local_path,
+                size_mb=size_mb,
+                cached_at=datetime.now().isoformat(),
+                metadata=metadata or {},
+            )
+
+            # Register model
+            self._model_registry[model_id] = model_info
+            self._save_model_registry()
+
+            # Cache metadata
+            if metadata:
+                self.cache_model_info(model_id, metadata)
+
+            logger.info(f"Registered model: {model_type}/{model_id} ({size_mb:.1f}MB)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to register model {model_id}: {e}")
+            return False
+
+    def get_registered_models(
+        self, model_type: Optional[str] = None
+    ) -> List[ModelInfo]:
+        """取得已註冊的模型列表"""
+        models = list(self._model_registry.values())
+
+        if model_type:
+            models = [m for m in models if m.model_type == model_type]
+
+        return sorted(models, key=lambda x: x.cached_at, reverse=True)
+
+    def is_model_cached(self, model_id: str) -> bool:
+        """檢查模型是否已快取"""
+        return model_id in self._model_registry
+
+    def get_model_info(self, model_id: str) -> Optional[ModelInfo]:
+        """取得模型資訊"""
+        return self._model_registry.get(model_id)
+
+    def cleanup_old_cache(self, max_age_days: int = 30) -> Dict[str, int]:
+        """清理舊的快取檔案"""
+        cleanup_stats = {"files": 0, "memory": 0, "size_freed_mb": 0}
+        cutoff_time = time.time() - (max_age_days * 24 * 3600)
+
+        # Clean memory cache
         with self._cache_lock:
-            now = datetime.now()
-            expired_keys = [
-                k for k, v in self._memory_cache.items() if now > v["expires_at"]
-            ]
+            expired_keys = []
+            for key, value in self._memory_cache.items():
+                if isinstance(value, dict) and "cached_at" in value:
+                    try:
+                        cached_time = datetime.fromisoformat(
+                            value["cached_at"]
+                        ).timestamp()
+                        if cached_time < cutoff_time:
+                            expired_keys.append(key)
+                    except Exception:
+                        continue
+
             for key in expired_keys:
                 del self._memory_cache[key]
-            cleanup_stats["memory"] = len(expired_keys)
+                cleanup_stats["memory"] += 1
 
-        # 清理舊的暫存檔案 (超過 7 天)
-        cutoff_time = datetime.now() - timedelta(days=7)
-        temp_dirs = [self.app_dirs["outputs_batch"], self.app_dirs["outputs_exports"]]
+        # Clean old model files (optional - be careful!)
+        # Only clean temporary/cache files, not registered models
+        temp_dirs = [self.cache_paths.cache / "temp", self.cache_paths.outputs / "temp"]
 
         for temp_dir in temp_dirs:
             if temp_dir.exists():
                 for file_path in temp_dir.rglob("*"):
                     if file_path.is_file():
                         try:
-                            file_time = datetime.fromtimestamp(
-                                file_path.stat().st_mtime
-                            )
+                            file_time = file_path.stat().st_mtime
                             if file_time < cutoff_time:
+                                size_mb = file_path.stat().st_size / (1024 * 1024)
                                 file_path.unlink()
                                 cleanup_stats["files"] += 1
+                                cleanup_stats["size_freed_mb"] += size_mb
                         except Exception:
                             continue
 
         if cleanup_stats["memory"] + cleanup_stats["files"] > 0:
-            logger.info(f"Cleanup completed: {cleanup_stats}")
+            logger.info(f"Cache cleanup completed: {cleanup_stats}")
 
         return cleanup_stats
 
@@ -287,7 +288,7 @@ class SharedCache:
         """取得快取統計資訊"""
         try:
             stats = {
-                "cache_root": str(self.cache_root),
+                "cache_root": str(self.cache_paths.root),
                 "total_size_gb": 0.0,
                 "directories": {},
                 "memory_cache": {
@@ -296,15 +297,38 @@ class SharedCache:
                     "misses": self.stats["memory"].misses,
                     "hit_rate": self.stats["memory"].hit_rate,
                 },
+                "registered_models": {
+                    "total": len(self._model_registry),
+                    "by_type": {},
+                },
                 "system": self._get_system_stats(),
             }
 
-            # 計算各目錄大小
-            for name, path in self.app_dirs.items():
+            # Calculate directory sizes
+            cache_dirs = {
+                "models": self.cache_paths.models,
+                "datasets": self.cache_paths.datasets,
+                "outputs": self.cache_paths.outputs,
+                "cache": self.cache_paths.cache,
+                "runs": self.cache_paths.runs,
+            }
+
+            for name, path in cache_dirs.items():
                 if path.exists():
                     dir_stats = self._calculate_directory_stats(path)
                     stats["directories"][name] = dir_stats
                     stats["total_size_gb"] += dir_stats["size_gb"]
+
+            # Model statistics by type
+            model_types = {}
+            for model_info in self._model_registry.values():
+                model_type = model_info.model_type
+                if model_type not in model_types:
+                    model_types[model_type] = {"count": 0, "size_gb": 0.0}
+                model_types[model_type]["count"] += 1
+                model_types[model_type]["size_gb"] += model_info.size_gb
+
+            stats["registered_models"]["by_type"] = model_types
 
             return stats
 
@@ -345,294 +369,150 @@ class SharedCache:
                         "available": True,
                         "device_count": torch.cuda.device_count(),
                         "current_device": torch.cuda.current_device(),
+                        "device_name": torch.cuda.get_device_name(),
                         "memory_allocated_gb": round(
-                            torch.cuda.memory_allocated() / (1024**3), 3
+                            torch.cuda.memory_allocated() / (1024**3), 2
                         ),
                         "memory_reserved_gb": round(
-                            torch.cuda.memory_reserved() / (1024**3), 3
-                        ),
-                        "memory_total_gb": round(
-                            torch.cuda.get_device_properties(0).total_memory
-                            / (1024**3),
-                            1,
+                            torch.cuda.memory_reserved() / (1024**3), 2
                         ),
                     }
             except ImportError:
                 pass
 
-            # 系統資源
+            # CPU 和記憶體資訊
+            cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
-            disk = psutil.disk_usage(str(self.cache_root_path.parent))
+            disk = psutil.disk_usage(str(self.cache_paths.root))
 
             return {
                 "gpu": gpu_info,
+                "cpu_percent": cpu_percent,
                 "memory": {
-                    "total_gb": round(memory.total / (1024**3), 1),
-                    "available_gb": round(memory.available / (1024**3), 1),
-                    "percent_used": memory.percent,
+                    "total_gb": round(memory.total / (1024**3), 2),
+                    "available_gb": round(memory.available / (1024**3), 2),
+                    "used_percent": memory.percent,
                 },
                 "disk": {
-                    "total_gb": round(disk.total / (1024**3), 1),
-                    "free_gb": round(disk.free / (1024**3), 1),
-                    "percent_used": round((disk.used / disk.total) * 100, 1),
+                    "total_gb": round(disk.total / (1024**3), 2),
+                    "free_gb": round(disk.free / (1024**3), 2),
+                    "used_percent": round((disk.used / disk.total) * 100, 1),
                 },
             }
         except Exception as e:
             return {"error": str(e)}
 
-    def get_device_config(self, device: str = "auto") -> Dict[str, Any]:
-        """取得裝置配置建議"""
+    def get_device_config(self) -> Dict[str, Any]:
+        """取得設備配置資訊"""
         try:
             import torch
 
-            config = {
-                "device": (
-                    device
-                    if device != "auto"
-                    else ("cuda" if torch.cuda.is_available() else "cpu")
+            device_config = {
+                "cuda_available": torch.cuda.is_available(),
+                "device_count": (
+                    torch.cuda.device_count() if torch.cuda.is_available() else 0
                 ),
-                "torch_dtype": "float16" if torch.cuda.is_available() else "float32",
-                "low_vram_mode": False,
+                "current_device": (
+                    torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+                ),
+                "low_vram_mode": self.settings.model.low_vram_mode,
+                "use_fp16": self.settings.model.use_fp16,
+                "use_bf16": self.settings.model.use_bf16,
+                "enable_xformers": self.settings.model.enable_xformers,
+                "cpu_offload": self.settings.model.enable_cpu_offload,
             }
 
-            # 低 VRAM 最佳化
             if torch.cuda.is_available():
-                try:
-                    gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (
-                        1024**3
-                    )
-                    if gpu_memory_gb < 8:
-                        config.update(
-                            {
-                                "low_vram_mode": True,
-                                "enable_attention_slicing": True,
-                                "enable_vae_slicing": True,
-                                "enable_cpu_offload": True,
-                                "torch_dtype": "float16",
-                            }
-                        )
-                        logger.info(
-                            f"Enabled low-VRAM optimizations for {gpu_memory_gb:.1f}GB GPU"
-                        )
-                    elif gpu_memory_gb < 12:
-                        config.update(
-                            {
-                                "enable_attention_slicing": True,
-                                "enable_vae_slicing": False,
-                                "enable_cpu_offload": False,
-                            }
-                        )
-                except Exception:
-                    pass
+                device_config.update(
+                    {
+                        "device_name": torch.cuda.get_device_name(),
+                        "compute_capability": torch.cuda.get_device_capability(),
+                        "memory_total_gb": round(
+                            torch.cuda.get_device_properties(0).total_memory
+                            / (1024**3),
+                            2,
+                        ),
+                    }
+                )
 
-            return config
+            return device_config
 
         except ImportError:
-            return {"device": "cpu", "torch_dtype": "float32", "low_vram_mode": True}
-
-    def create_model_symlink(
-        self, source_path: str, target_model_type: str, target_name: str
-    ) -> bool:
-        """建立模型符號連結（避免重複儲存）"""
-        try:
-            source = Path(source_path)
-            if not source.exists():
-                logger.error(f"Source model not found: {source}")
-                return False
-
-            target = self.get_model_path(target_model_type, target_name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-
-            if target.exists():
-                if target.is_symlink():
-                    target.unlink()  # 移除舊連結
-                else:
-                    logger.warning(
-                        f"Target already exists and is not a symlink: {target}"
-                    )
-                    return False
-
-            # 建立符號連結
-            target.symlink_to(source.resolve())
-            logger.info(f"Created symlink: {target} -> {source}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to create symlink: {e}")
-            return False
-
-    def register_model(
-        self, model_type: str, model_name: str, metadata: Dict[str, Any]
-    ) -> bool:
-        """註冊模型到快取系統"""
-        try:
-            model_path = self.get_model_path(model_type, model_name)
-
-            # 擴充元資料
-            full_metadata = {
-                "model_type": model_type,
-                "model_name": model_name,
-                "model_path": str(model_path),
-                "registered_at": datetime.now().isoformat(),
-                "cache_version": "1.0",
-                **metadata,
-            }
-
-            # 快取模型資訊
-            cache_key = f"{model_type}_{model_name}"
-            self.cache_model_info(cache_key, full_metadata)
-
-            # 更新模型註冊表
-            registry_file = self.app_dirs["registry"] / "models.json"
-            registry = {}
-
-            if registry_file.exists():
-                try:
-                    with open(registry_file, "r", encoding="utf-8") as f:
-                        registry = json.load(f)
-                except Exception:
-                    pass
-
-            registry[cache_key] = full_metadata
-
-            with open(registry_file, "w", encoding="utf-8") as f:
-                json.dump(registry, f, indent=2, ensure_ascii=False)
-
-            logger.info(f"Registered model: {model_type}/{model_name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to register model {model_type}/{model_name}: {e}")
-            return False
-
-    def list_registered_models(
-        self, model_type: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """列出已註冊的模型"""
-        try:
-            registry_file = self.app_dirs["registry"] / "models.json"
-            if not registry_file.exists():
-                return []
-
-            with open(registry_file, "r", encoding="utf-8") as f:
-                registry = json.load(f)
-
-            models = list(registry.values())
-
-            if model_type:
-                models = [m for m in models if m.get("model_type") == model_type]
-
-            return sorted(models, key=lambda x: x.get("registered_at", ""))
-
-        except Exception as e:
-            logger.error(f"Failed to list registered models: {e}")
-            return []
+            return {"cuda_available": False, "error": "PyTorch not available"}
 
     def get_summary(self) -> Dict[str, Any]:
         """取得快取系統摘要"""
         return {
-            "cache_root": str(self.cache_root),
+            "cache_root": str(self.cache_paths.root),
+            "app_root": str(self.app_paths.root),
             "status": "healthy",
-            "directories": {name: str(path) for name, path in self.app_dirs.items()},
+            "environment": self.settings.environment,
+            "debug_mode": self.settings.debug,
+            "directories": {
+                "cache_paths": {
+                    name: str(getattr(self.cache_paths, name))
+                    for name in [
+                        "root",
+                        "models",
+                        "datasets",
+                        "outputs",
+                        "cache",
+                        "runs",
+                    ]
+                },
+                "app_paths": {
+                    name: str(getattr(self.app_paths, name))
+                    for name in [
+                        "models_sd15",
+                        "models_sdxl",
+                        "lora_weights",
+                        "training_runs",
+                    ]
+                },
+            },
             "stats": self.get_cache_stats(),
             "device_config": self.get_device_config(),
-            "env_vars": {
-                "HF_HOME": os.environ.get("HF_HOME"),
-                "TORCH_HOME": os.environ.get("TORCH_HOME"),
-                "CUDA_VISIBLE_DEVICES": os.environ.get(
-                    "CUDA_VISIBLE_DEVICES", "not_set"
-                ),
-            },
+            "registered_models": len(self._model_registry),
         }
 
 
-# ===== 全域實例 =====
-_shared_cache_instance = None
+# ===== Global Instance Management =====
+
+_shared_cache_instance: Optional[SharedCache] = None
 
 
-def get_shared_cache(cache_root: Optional[str] = None) -> SharedCache:
+def get_shared_cache() -> SharedCache:
     """取得或建立共用快取實例"""
     global _shared_cache_instance
     if _shared_cache_instance is None:
-        _shared_cache_instance = SharedCache(cache_root)
+        _shared_cache_instance = SharedCache()
     return _shared_cache_instance
 
 
-def bootstrap_cache(
-    cache_root: Optional[str] = None, verbose: bool = True
-) -> SharedCache:
-    """初始化共用快取並顯示摘要"""
-    cache = get_shared_cache(cache_root)
+def bootstrap_cache(verbose: bool = False) -> SharedCache:
+    """Bootstrap shared cache system"""
+    if verbose:
+        print("🗂️  Bootstrapping shared cache system...")
+
+    cache = get_shared_cache()
 
     if verbose:
-        device_config = cache.get_device_config()
-        system_stats = cache._get_system_stats()
+        summary = cache.get_summary()
+        print(f"✅ Shared cache initialized")
+        print(f"   Cache root: {summary['cache_root']}")
+        print(f"   Registered models: {summary['registered_models']}")
+        print(f"   Device: {summary['device_config'].get('device_name', 'CPU')}")
 
-        print(f"🎮 [SharedCache] Root: {cache.cache_root}")
-        print(f"🖥️  [GPU] Available: {system_stats['gpu']['available']}")
-
-        if system_stats["gpu"]["available"]:
-            gpu = system_stats["gpu"]
+        if summary["device_config"]["cuda_available"]:
             print(
-                f"💾 [VRAM] {gpu['memory_allocated_gb']:.1f}GB used / {gpu['memory_total_gb']:.1f}GB total"
+                f"   GPU memory: {summary['device_config'].get('memory_total_gb', 0)}GB"
             )
-            if device_config.get("low_vram_mode"):
-                print("⚡ [Optimization] Low-VRAM mode enabled")
-
-        memory = system_stats["memory"]
-        print(
-            f"🧠 [RAM] {memory['available_gb']:.1f}GB free / {memory['total_gb']:.1f}GB total"
-        )
+            print(f"   Low VRAM mode: {summary['device_config']['low_vram_mode']}")
 
     return cache
 
 
-def clear_all_cache():
-    """清除所有快取（開發用）"""
-    cache = get_shared_cache()
-    cleanup_stats = cache.cleanup_expired_cache()
-    memory_cleared = cache.clear_memory_cache()
-
-    print(
-        f"🧹 Cache cleanup: {cleanup_stats['memory']} expired + {memory_cleared} memory items"
-    )
-
-
-# ===== 便利函數 =====
-def get_app_path(key: str) -> Path:
-    """快速取得應用程式路徑"""
-    return get_shared_cache().get_path(key)
-
-
-def cache_model_quick(model_key: str, model_info: Dict[str, Any]):
-    """快速快取模型資訊"""
-    get_shared_cache().cache_model_info(model_key, model_info)
-
-
-def get_model_quick(model_key: str) -> Optional[Dict[str, Any]]:
-    """快速取得模型資訊"""
-    return get_shared_cache().get_model_info(model_key)
-
-
-if __name__ == "__main__":
-    # 測試初始化
-    print("=== SharedCache Bootstrap Test ===")
-    cache = bootstrap_cache()
-
-    # 顯示摘要
-    summary = cache.get_summary()
-    print(f"\n📊 Cache Summary:")
-    print(f"Status: {summary['status']}")
-    print(f"Directories: {len(summary['directories'])}")
-
-    # 測試模型註冊
-    test_metadata = {"description": "Test model", "size_gb": 1.5, "source": "test"}
-
-    success = cache.register_model("lora", "test_model", test_metadata)
-    print(f"Model registration test: {'✅' if success else '❌'}")
-
-    # 列出模型
-    models = cache.list_registered_models("lora")
-    print(f"Registered LoRA models: {len(models)}")
-
-    print("\n✅ SharedCache initialization completed")
+def reset_shared_cache() -> None:
+    """重置共用快取實例 (測試用)"""
+    global _shared_cache_instance
+    _shared_cache_instance = None
