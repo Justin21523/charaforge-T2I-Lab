@@ -37,7 +37,7 @@ for k, v in {
     os.environ[k] = v
     pathlib.Path(v).mkdir(parents=True, exist_ok=True)
 
-from backend.utils.logging import setup_logging, get_logger
+from .utils.logging import setup_logging, get_logger
 
 logger = get_logger(__name__)
 
@@ -90,7 +90,7 @@ class SystemMonitor:
         # CPU metrics
         cpu_percent = psutil.cpu_percent(interval=1)
         cpu_count = psutil.cpu_count()
-        load_avg = os.getloadavg() if hasattr(os, "getloadavg") else [0, 0, 0]
+        load_avg = os.getloadavg() if hasattr(os, "getloadavg") else [0, 0, 0]  # type: ignore
 
         metrics["cpu"] = {
             "usage_percent": cpu_percent,
