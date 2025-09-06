@@ -1,7 +1,6 @@
-# core/config.py - Unified Configuration Management
+# core/config.py - Fixed Unified Configuration Management
 """
-統一設定管理系統 - 支援 .env + configs/*.yaml
-確保所有模組使用一致的設定與路徑管理
+統一設定管理系統 - 修正版本，包含所有缺失的屬性和方法
 """
 
 import os
@@ -73,10 +72,11 @@ class CachePaths:
 
 @dataclass(frozen=True)
 class AppPaths:
-    """Application specific directory paths"""
+    """Application specific directory paths - Fixed with outputs"""
 
     root: Path
     configs: Path
+    outputs: Path  # Add missing outputs property
 
     # Model specific paths
     models_sd15: Path
@@ -102,6 +102,7 @@ class AppPaths:
         return cls(
             root=project_root,
             configs=project_root / "configs",
+            outputs=cache_paths.outputs,  # Add outputs path
             # Model paths
             models_sd15=cache_paths.models / "sd15",
             models_sdxl=cache_paths.models / "sdxl",
@@ -172,7 +173,7 @@ class TrainingConfig(BaseSettings):
 
 
 class APIConfig(BaseSettings):
-    """API configuration settings"""
+    """API configuration settings - Fixed with missing properties"""
 
     # Server settings
     host: str = Field(default="0.0.0.0")
@@ -222,9 +223,9 @@ class CeleryConfig(BaseSettings):
 
 
 class AppSettings(BaseSettings):
-    """Main application settings"""
+    """Main application settings - Fixed with missing properties"""
 
-    # Environment
+    # Environment - Add missing properties
     environment: str = Field(
         default="development", pattern="^(development|staging|production)$"
     )
@@ -235,6 +236,9 @@ class AppSettings(BaseSettings):
 
     # Cache configuration
     ai_cache_root: str = Field(default="../ai_warehouse/cache")
+
+    # Redis URL - Add missing redis_url property
+    redis_url: str = Field(default="redis://localhost:6379/0")
 
     # Component settings
     model: ModelConfig = Field(default_factory=ModelConfig)
@@ -341,6 +345,7 @@ def get_app_paths() -> AppPaths:
         # Create app directories
         for path in [
             _app_paths_instance.configs,
+            _app_paths_instance.outputs,  # Add outputs to creation list
             _app_paths_instance.models_sd15,
             _app_paths_instance.models_sdxl,
             _app_paths_instance.models_controlnet,
@@ -392,6 +397,22 @@ def get_training_config(config_name: Optional[str] = None) -> Dict[str, Any]:
         config.update(templates[config_name])
 
     return config
+
+
+def get_run_output_dir(run_id: str, run_type: str = "training") -> Path:
+    """Get output directory for a specific run - Add missing function"""
+    app_paths = get_app_paths()
+
+    if run_type == "training":
+        return app_paths.training_runs / run_id
+    elif run_type == "generation":
+        return app_paths.outputs / "generation" / run_id
+    elif run_type == "batch":
+        return app_paths.outputs / "batch" / run_id
+    elif run_type == "export":
+        return app_paths.exports / run_id
+    else:
+        return app_paths.outputs / run_type / run_id
 
 
 def setup_environment_variables() -> None:
@@ -530,7 +551,7 @@ def bootstrap_config(verbose: bool = False) -> Dict[str, Any]:
                 print(f"   - {error}")
 
         if validation["warnings"]:
-            print(f"⚠️  Warnings: {len(validation['warnings'])}")
+            print(f"⚠️ Warnings: {len(validation['warnings'])}")
 
     return summary
 
@@ -564,6 +585,7 @@ def get_config_summary() -> Dict[str, Any]:
         "project_root": str(app_paths.root),
         "api_host": f"{settings.api.host}:{settings.api.port}",
         "celery_broker": settings.celery.broker_url,
+        "redis_url": settings.redis_url,
         "model_defaults": {
             "sd15": settings.model.default_sd15_model,
             "sdxl": settings.model.default_sdxl_model,
