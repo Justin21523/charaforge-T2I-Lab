@@ -64,7 +64,7 @@ def batch_generate_task(
 
                 try:
                     # Update progress
-                    current_task.update_state(
+                    current_task.update_state(  # type: ignore
                         state="PROGRESS",
                         meta={
                             "current": completed + 1,
