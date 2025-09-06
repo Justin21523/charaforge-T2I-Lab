@@ -171,7 +171,7 @@ class T2ISmokeTest:
             manager = get_pipeline_manager()
 
             # Test pipeline creation
-            pipeline = manager.get_pipeline("sd15")
+            pipeline = manager.get_pipeline("sd15")  # type: ignore
             assert pipeline is not None, "Pipeline should be created"
 
             # Test pipeline status
