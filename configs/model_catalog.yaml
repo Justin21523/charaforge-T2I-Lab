@@ -1,0 +1,634 @@
+# Multi-Modal Lab 完整模型目錄配置
+# 基於「各類AI模型資訊與應用.md」的所有模型定義
+
+# ===== LLM 對話/推理模型 =====
+llm_models:
+  deepseek-llm-7b:
+    model_id: "deepseek-ai/deepseek-llm-7b-chat"
+    category: "llm"
+    priority: "high"
+    size_gb: 13.0
+    description: "DeepSeek LLM 7B 長上下文推理模型，Function Calling"
+    dependencies: ["transformers", "torch", "accelerate"]
+    download_method: "huggingface"
+    tags: ["chat", "function-calling", "rag", "chinese"]
+
+  qwen2-7b-instruct:
+    model_id: "Qwen/Qwen2-7B-Instruct"
+    category: "llm"
+    priority: "high"
+    size_gb: 14.0
+    description: "Qwen2 7B 指令模型，中文極強"
+    dependencies: ["transformers", "torch", "accelerate"]
+    download_method: "huggingface"
+    tags: ["chat", "chinese", "instruction"]
+
+  yi-6b-chat:
+    model_id: "01-ai/Yi-6B-Chat"
+    category: "llm"
+    priority: "medium"
+    size_gb: 12.0
+    description: "Yi 6B 中英雙優開源商用模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["chat", "commercial", "bilingual"]
+
+  chatglm3-6b:
+    model_id: "THUDM/chatglm3-6b"
+    category: "llm"
+    priority: "medium"
+    size_gb: 12.0
+    description: "ChatGLM3 6B 中文本地對話，指令精細"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["chat", "chinese", "local"]
+
+  baichuan2-7b-chat:
+    model_id: "baichuan-inc/Baichuan2-7B-Chat"
+    category: "llm"
+    priority: "medium"
+    size_gb: 13.0
+    description: "百川2 7B 中文知識庫/FAQ模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["chat", "chinese", "knowledge"]
+
+  minicpm-2b:
+    model_id: "openbmb/MiniCPM-2B-sft-bf16"
+    category: "llm"
+    priority: "low"
+    size_gb: 4.0
+    description: "MiniCPM 2B 輕量嵌入式部署模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["lightweight", "edge", "mobile"]
+
+  openhermes-13b:
+    model_id: "teknium/OpenHermes-13B"
+    category: "llm"
+    priority: "low"
+    size_gb: 26.0
+    description: "OpenHermes 13B 無審查角色扮演模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["uncensored", "roleplay", "nsfw"]
+
+# ===== 視覺語言/VQA 模型 =====
+vlm_models:
+  blip2-opt-2.7b:
+    model_id: "Salesforce/blip2-opt-2.7b"
+    category: "vlm"
+    priority: "high"
+    size_gb: 5.4
+    description: "BLIP-2 圖像描述和視覺問答"
+    dependencies: ["transformers", "torch", "accelerate"]
+    download_method: "huggingface"
+    tags: ["caption", "vqa", "multimodal"]
+
+  blip2-flan-t5-xl:
+    model_id: "Salesforce/blip2-flan-t5-xl"
+    category: "vlm"
+    priority: "medium"
+    size_gb: 8.0
+    description: "BLIP-2 Flan-T5 XL 版本"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["caption", "vqa", "t5"]
+
+  llava-v1.5-7b:
+    model_id: "llava-hf/llava-1.5-7b-hf"
+    category: "vlm"
+    priority: "high"
+    size_gb: 13.0
+    description: "LLaVA 1.5 7B 多模態問答，本地部署"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["vqa", "chat", "multimodal"]
+
+  llava-v1.5-13b:
+    model_id: "llava-hf/llava-1.5-13b-hf"
+    category: "vlm"
+    priority: "medium"
+    size_gb: 25.0
+    description: "LLaVA 1.5 13B 大型多模態模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["vqa", "chat", "large"]
+
+  qwen-vl-chat:
+    model_id: "Qwen/Qwen-VL-Chat"
+    category: "vlm"
+    priority: "high"
+    size_gb: 9.6
+    description: "Qwen-VL 中文視覺語言模型，動漫插畫支援"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["chinese", "anime", "vqa"]
+
+  minigpt4-vicuna-7b:
+    model_id: "Vision-CAIR/MiniGPT-4"
+    category: "vlm"
+    priority: "medium"
+    size_gb: 13.0
+    description: "MiniGPT-4 視覺對話模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["vqa", "chat", "vision"]
+
+  visualglm-6b:
+    model_id: "THUDM/visualglm-6b"
+    category: "vlm"
+    priority: "medium"
+    size_gb: 11.0
+    description: "VisualGLM 6B 中文多模態模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["chinese", "multimodal", "glm"]
+
+# ===== 文字→圖像生成模型 =====
+text2image_models:
+  sdxl-base:
+    model_id: "stabilityai/stable-diffusion-xl-base-1.0"
+    category: "text2image"
+    priority: "high"
+    size_gb: 13.0
+    description: "SDXL 基礎模型，1024px高畫質生圖"
+    dependencies: ["diffusers", "torch", "accelerate"]
+    download_method: "huggingface"
+    tags: ["sdxl", "high-res", "base"]
+
+  sdxl-refiner:
+    model_id: "stabilityai/stable-diffusion-xl-refiner-1.0"
+    category: "text2image"
+    priority: "medium"
+    size_gb: 13.0
+    description: "SDXL 精細化模型，提升細節"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["sdxl", "refiner", "detail"]
+
+  sd15-base:
+    model_id: "runwayml/stable-diffusion-v1-5"
+    category: "text2image"
+    priority: "high"
+    size_gb: 7.0
+    description: "Stable Diffusion 1.5 經典基礎模型"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["sd15", "classic", "base"]
+
+  deepfloyd-if-xl:
+    model_id: "DeepFloyd/IF-I-XL-v1.0"
+    category: "text2image"
+    priority: "medium"
+    size_gb: 9.0
+    description: "DeepFloyd IF 高細節插畫寫實"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["high-detail", "realistic", "illustration"]
+
+  pixart-alpha-xl:
+    model_id: "PixArt-alpha/PixArt-XL-2-1024-MS"
+    category: "text2image"
+    priority: "medium"
+    size_gb: 11.0
+    description: "PixArt-α 多題材插畫，接近MidJourney"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["illustration", "midjourney-like", "artistic"]
+
+  stable-cascade:
+    model_id: "stabilityai/stable-cascade"
+    category: "text2image"
+    priority: "low"
+    size_gb: 15.0
+    description: "Stable Cascade 速度極快生圖"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["fast", "efficient", "runway"]
+
+# ===== 文字→影片生成模型 =====
+text2video_models:
+  animatediff-v15:
+    model_id: "guoyww/animatediff-motion-adapter-v1-5-2"
+    category: "text2video"
+    priority: "medium"
+    size_gb: 4.0
+    description: "AnimateDiff SD動畫LoRA，二創插畫動態"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["animation", "lora", "creative"]
+
+  stable-video-diffusion:
+    model_id: "stabilityai/stable-video-diffusion-img2vid-xt"
+    category: "text2video"
+    priority: "medium"
+    size_gb: 9.0
+    description: "Stable Video Diffusion 文生短片"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["video", "img2vid", "short-form"]
+
+  modelscope-t2v:
+    model_id: "damo-vilab/text-to-video-ms-1.7b"
+    category: "text2video"
+    priority: "low"
+    size_gb: 7.0
+    description: "ModelScope 中文多語T2V短片創作"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["chinese", "text2video", "multilingual"]
+
+# ===== ControlNet 控制模型 =====
+controlnet_models:
+  canny-controlnet:
+    model_id: "lllyasviel/sd-controlnet-canny"
+    category: "controlnet"
+    priority: "high"
+    size_gb: 2.5
+    description: "Canny邊緣檢測ControlNet"
+    dependencies: ["diffusers", "controlnet_aux", "opencv-python"]
+    download_method: "huggingface"
+    tags: ["canny", "edge", "control"]
+
+  depth-controlnet:
+    model_id: "lllyasviel/sd-controlnet-depth"
+    category: "controlnet"
+    priority: "high"
+    size_gb: 2.5
+    description: "深度圖ControlNet"
+    dependencies: ["diffusers", "controlnet_aux"]
+    download_method: "huggingface"
+    tags: ["depth", "3d", "control"]
+
+  pose-controlnet:
+    model_id: "lllyasviel/sd-controlnet-openpose"
+    category: "controlnet"
+    priority: "high"
+    size_gb: 2.5
+    description: "OpenPose姿態檢測ControlNet"
+    dependencies: ["diffusers", "controlnet_aux"]
+    download_method: "huggingface"
+    tags: ["pose", "human", "control"]
+
+  scribble-controlnet:
+    model_id: "lllyasviel/sd-controlnet-scribble"
+    category: "controlnet"
+    priority: "medium"
+    size_gb: 2.5
+    description: "塗鴉線稿ControlNet"
+    dependencies: ["diffusers", "controlnet_aux"]
+    download_method: "huggingface"
+    tags: ["scribble", "sketch", "control"]
+
+  sdxl-canny-controlnet:
+    model_id: "diffusers/controlnet-canny-sdxl-1.0"
+    category: "controlnet"
+    priority: "medium"
+    size_gb: 5.0
+    description: "SDXL Canny ControlNet"
+    dependencies: ["diffusers", "controlnet_aux"]
+    download_method: "huggingface"
+    tags: ["sdxl", "canny", "high-res"]
+
+# ===== 語音合成 TTS 模型 =====
+tts_models:
+  openvoice:
+    model_id: "myshell-ai/OpenVoice"
+    category: "tts"
+    priority: "medium"
+    size_gb: 2.0
+    description: "OpenVoice 少樣本快速仿聲，多語TTS"
+    dependencies: ["torch", "torchaudio", "librosa"]
+    download_method: "huggingface"
+    tags: ["voice-cloning", "multilingual", "few-shot"]
+
+  coqui-xtts-v2:
+    model_id: "coqui/XTTS-v2"
+    category: "tts"
+    priority: "medium"
+    size_gb: 4.0
+    description: "Coqui XTTS v2 多語高品質仿聲TTS"
+    dependencies: ["torch", "torchaudio", "coqui-tts"]
+    download_method: "huggingface"
+    tags: ["high-quality", "voice-cloning", "emotional"]
+
+  bark:
+    model_id: "suno/bark"
+    category: "tts"
+    priority: "low"
+    size_gb: 3.0
+    description: "Bark 多情感語音生成，支援背景音樂"
+    dependencies: ["torch", "torchaudio", "scipy"]
+    download_method: "huggingface"
+    tags: ["emotional", "music", "creative"]
+
+# ===== 圖像修復/增強模型 =====
+enhancement_models:
+  real-esrgan-x4:
+    model_id: ""
+    category: "enhancement"
+    priority: "medium"
+    size_gb: 0.5
+    description: "Real-ESRGAN 4x圖片影片超分辨率，動畫支援"
+    dependencies: ["opencv-python", "torch"]
+    download_method: "custom"
+    custom_url: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+    tags: ["super-resolution", "anime", "video"]
+
+  real-esrgan-anime:
+    model_id: ""
+    category: "enhancement"
+    priority: "medium"
+    size_gb: 0.5
+    description: "Real-ESRGAN 動漫專用超分辨率"
+    dependencies: ["opencv-python", "torch"]
+    download_method: "custom"
+    custom_url: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"
+    tags: ["anime", "super-resolution", "specialized"]
+
+  gfpgan-v13:
+    model_id: ""
+    category: "enhancement"
+    priority: "medium"
+    size_gb: 0.3
+    description: "GFPGAN v1.3 人臉修復，自然還原"
+    dependencies: ["opencv-python", "torch"]
+    download_method: "custom"
+    custom_url: "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth"
+    tags: ["face-restoration", "portrait", "repair"]
+
+  codeformer:
+    model_id: ""
+    category: "enhancement"
+    priority: "low"
+    size_gb: 0.3
+    description: "CodeFormer 人臉修復模型"
+    dependencies: ["opencv-python", "torch"]
+    download_method: "custom"
+    custom_url: "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth"
+    tags: ["face-restoration", "blind-restoration"]
+
+  # 影片相關增強模型
+  edvr:
+    model_id: ""
+    category: "enhancement"
+    priority: "low"
+    size_gb: 2.0
+    description: "EDVR 老片動畫專業修復，時序穩定"
+    dependencies: ["opencv-python", "torch"]
+    download_method: "git"
+    custom_url: "https://github.com/xinntao/EDVR.git"
+    tags: ["video", "temporal", "restoration"]
+
+  basicvsr:
+    model_id: ""
+    category: "enhancement"
+    priority: "low"
+    size_gb: 1.5
+    description: "BasicVSR 影片超分辨率，時序一致"
+    dependencies: ["opencv-python", "torch"]
+    download_method: "git"
+    custom_url: "https://github.com/ckkelvinchan/BasicVSR_PyTorch.git"
+    tags: ["video", "super-resolution", "temporal"]
+
+# ===== 圖像標註/分析模型 =====
+tagging_models:
+  wd14-convnextv2:
+    model_id: "SmilingWolf/wd-v1-4-convnextv2-tagger-v2"
+    category: "tagging"
+    priority: "medium"
+    size_gb: 0.8
+    description: "WD14 動漫圖像標註模型"
+    dependencies: ["transformers", "torch", "timm"]
+    download_method: "huggingface"
+    tags: ["anime", "tagging", "classification"]
+
+  wd14-swinv2:
+    model_id: "SmilingWolf/wd-v1-4-swinv2-tagger-v2"
+    category: "tagging"
+    priority: "low"
+    size_gb: 0.9
+    description: "WD14 SwinV2 動漫標註模型"
+    dependencies: ["transformers", "torch", "timm"]
+    download_method: "huggingface"
+    tags: ["anime", "tagging", "swin"]
+
+  deepdanbooru:
+    model_id: ""
+    category: "tagging"
+    priority: "low"
+    size_gb: 0.2
+    description: "DeepDanbooru 動漫屬性批次標籤"
+    dependencies: ["tensorflow"]
+    download_method: "custom"
+    custom_url: "https://github.com/KichangKim/DeepDanbooru/releases/download/v3.0/deepdanbooru-v3-20211112-sgd-e28.zip"
+    tags: ["anime", "danbooru", "tensorflow"]
+
+# ===== 嵌入向量模型 =====
+embedding_models:
+  bge-base-zh-v15:
+    model_id: "BAAI/bge-base-zh-v1.5"
+    category: "embedding"
+    priority: "high"
+    size_gb: 1.0
+    description: "BGE Base 中文嵌入模型"
+    dependencies: ["sentence-transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["chinese", "embedding", "rag"]
+
+  bge-m3:
+    model_id: "BAAI/bge-m3"
+    category: "embedding"
+    priority: "high"
+    size_gb: 2.0
+    description: "BGE M3 多語言多模態嵌入"
+    dependencies: ["sentence-transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["multilingual", "multimodal", "embedding"]
+
+  clip-vit-base-patch32:
+    model_id: "openai/clip-vit-base-patch32"
+    category: "embedding"
+    priority: "high"
+    size_gb: 0.6
+    description: "CLIP 圖文嵌入模型"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["clip", "vision-text", "embedding"]
+
+  clip-vit-large-patch14:
+    model_id: "openai/clip-vit-large-patch14"
+    category: "embedding"
+    priority: "medium"
+    size_gb: 1.7
+    description: "CLIP Large 高精度圖文嵌入"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["clip", "large", "high-precision"]
+
+# ===== 安全檢測模型 =====
+safety_models:
+  clip-safety-checker:
+    model_id: "CompVis/stable-diffusion-safety-checker"
+    category: "safety"
+    priority: "medium"
+    size_gb: 1.2
+    description: "CLIP 安全內容檢測器，NSFW過濾"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["nsfw", "safety", "filter"]
+
+# ===== 音頻處理模型 =====
+audio_models:
+  whisper-large-v3:
+    model_id: "openai/whisper-large-v3"
+    category: "audio"
+    priority: "medium"
+    size_gb: 3.0
+    description: "Whisper Large v3 多語言語音轉文字"
+    dependencies: ["transformers", "torch", "torchaudio"]
+    download_method: "huggingface"
+    tags: ["speech-to-text", "multilingual", "transcription"]
+
+  musicgen-medium:
+    model_id: "facebook/musicgen-medium"
+    category: "audio"
+    priority: "low"
+    size_gb: 3.0
+    description: "MusicGen 音樂生成模型"
+    dependencies: ["transformers", "torch", "torchaudio"]
+    download_method: "huggingface"
+    tags: ["music-generation", "audio", "creative"]
+
+# ===== 特殊用途模型 =====
+special_models:
+  # IP-Adapter 模型
+  ip-adapter-plus:
+    model_id: "h94/IP-Adapter"
+    category: "controlnet"
+    priority: "low"
+    size_gb: 1.0
+    description: "IP-Adapter 圖像提示適配器"
+    dependencies: ["diffusers", "torch"]
+    download_method: "huggingface"
+    tags: ["ip-adapter", "image-prompt", "control"]
+
+  # Segment Anything
+  sam-vit-huge:
+    model_id: "facebook/sam-vit-huge"
+    category: "vision"
+    priority: "low"
+    size_gb: 2.4
+    description: "Segment Anything Model 圖像分割"
+    dependencies: ["transformers", "torch"]
+    download_method: "huggingface"
+    tags: ["segmentation", "sam", "vision"]
+
+# ===== 下載配置 =====
+download_config:
+  # 並發設定
+  max_concurrent_downloads: 3
+
+  # 超時設定 (秒)
+  timeout:
+    huggingface: 3600 # 1小時
+    custom: 1800 # 30分鐘
+    git: 1800 # 30分鐘
+
+  # 重試設定
+  retry:
+    max_attempts: 3
+    delay_seconds: 5
+
+  # 驗證設定
+  verification:
+    check_file_integrity: true
+    min_file_size_mb: 10
+
+  # 快取設定
+  cache:
+    auto_cleanup: false
+    keep_temporary_files: false
+
+# ===== 分類群組 =====
+category_groups:
+  core:
+    description: "核心功能必需模型"
+    categories: ["llm", "vlm", "embedding"]
+    priorities: ["high"]
+
+  generation:
+    description: "內容生成模型"
+    categories: ["text2image", "text2video", "tts", "audio"]
+
+  enhancement:
+    description: "內容增強修復模型"
+    categories: ["enhancement", "tagging"]
+
+  control:
+    description: "生成控制模型"
+    categories: ["controlnet"]
+
+  safety:
+    description: "安全檢測模型"
+    categories: ["safety"]
+
+# ===== 硬體需求建議 =====
+hardware_requirements:
+  minimum:
+    vram_gb: 6
+    ram_gb: 16
+    storage_gb: 100
+    models: ["minicpm-2b", "clip-vit-base-patch32", "bge-base-zh-v15"]
+
+  recommended:
+    vram_gb: 12
+    ram_gb: 32
+    storage_gb: 500
+    models:
+      ["qwen2-7b-instruct", "llava-v1.5-7b", "sdxl-base", "blip2-opt-2.7b"]
+
+  high_end:
+    vram_gb: 24
+    ram_gb: 64
+    storage_gb: 1000
+    models: ["all"]
+
+# ===== 預設下載組合 =====
+preset_downloads:
+  minimal:
+    description: "最小功能組合"
+    models:
+      - "minicpm-2b"
+      - "blip2-opt-2.7b"
+      - "clip-vit-base-patch32"
+      - "bge-base-zh-v15"
+    total_size_gb: 8.0
+
+  standard:
+    description: "標準功能組合"
+    models:
+      - "qwen2-7b-instruct"
+      - "llava-v1.5-7b"
+      - "sdxl-base"
+      - "sd15-base"
+      - "canny-controlnet"
+      - "bge-m3"
+      - "clip-safety-checker"
+    total_size_gb: 55.0
+
+  full:
+    description: "完整功能組合"
+    categories: ["all"]
+    total_size_gb: 200.0
+
+  creative:
+    description: "創意內容生成組合"
+    models:
+      - "sdxl-base"
+      - "animatediff-v15"
+      - "openvoice"
+      - "real-esrgan-x4"
+      - "wd14-convnextv2"
+    total_size_gb: 25.0
