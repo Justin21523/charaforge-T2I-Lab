@@ -52,7 +52,7 @@ except ImportError:
     print("[ControlNet] controlnet_aux not available, using basic preprocessing")
     CONTROLNET_AUX_AVAILABLE = False
 
-from controlnet import ControlNetModel
+from t2i_controlnet import ControlNetModel
 
 from core.config import get_cache_paths, get_model_path
 from core.t2i.pipeline import PipelineManager
