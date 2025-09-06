@@ -1,0 +1,92 @@
+# ===== docker/docker-compose.workers.yml =====
+# Docker Compose for Workers Development
+# Workers 開發環境的 Docker 配置
+
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker-training:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - NVIDIA_VISIBLE_DEVICES=0
+    volumes:
+      - ../ai_warehouse:/app/ai_warehouse
+      - ../logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=1
+      -Q training
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  worker-generation:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - NVIDIA_VISIBLE_DEVICES=0
+    volumes:
+      - ../ai_warehouse:/app/ai_warehouse
+      - ../logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=2
+      -Q generation
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  flower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A workers.celery_app flower
+      --port=5555
+
+volumes:
+  redis_data:
