@@ -761,11 +761,11 @@ class ModelDownloader:
 
     def batch_download(
         self,
-        categories: List[str] = None,
-        priorities: List[str] = None,
-        model_names: List[str] = None,
+        categories: List[str] = None,  # type: ignore
+        priorities: List[str] = None,  # type: ignore
+        model_names: List[str] = None,  # type: ignore
         force: bool = False,
-        max_concurrent: int = None,
+        max_concurrent: int = None,  # type: ignore
     ) -> Dict:
         """批次下載模型"""
 
@@ -1012,8 +1012,8 @@ def main():
 
         logger.info("開始批次下載...")
         report = downloader.batch_download(
-            categories=categories,
-            priorities=priorities,
+            categories=categories,  # type: ignore
+            priorities=priorities,  # type: ignore
             model_names=args.models,
             force=args.force,
             max_concurrent=args.concurrent,

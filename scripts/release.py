@@ -16,7 +16,8 @@ import argparse
 
 
 class ReleaseManager:
-    def __init__(self, project_root: Path = None):
+
+    def __init__(self, project_root: Path = None):  # type: ignore
         self.project_root = project_root or Path(__file__).parent.parent
         self.version_files = {
             "pyproject.toml": r'version = "([^"]+)"',
