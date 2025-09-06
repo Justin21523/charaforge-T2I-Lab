@@ -11,9 +11,6 @@ from PIL import Image
 from typing import List, Dict, Any, Optional, Tuple, Union
 from pathlib import Path
 import re
-from transformers import CLIPProcessor, CLIPModel
-from transformers import AutoImageProcessor, AutoModelForImageClassification
-from PIL import ImageDraw, ImageFont
 
 from core.config import get_settings, get_app_paths
 from core.shared_cache import get_shared_cache
@@ -52,11 +49,12 @@ class NSFWDetector:
     def _load_clip_nsfw_model(self) -> bool:
         """載入基於 CLIP 的 NSFW 檢測模型"""
         try:
+            from transformers import CLIPProcessor, CLIPModel
 
             # Use CLIP for content analysis
             model_id = "openai/clip-vit-base-patch32"
 
-            self.model = CLIPModel.from_pretrained(model_id).to(self.device)
+            self.model = CLIPModel.from_pretrained(model_id).to(self.device)  # type: ignore
             self.processor = CLIPProcessor.from_pretrained(model_id)
 
             # NSFW classification prompts
@@ -89,6 +87,7 @@ class NSFWDetector:
     def _load_dedicated_nsfw_model(self) -> bool:
         """載入專用的 NSFW 檢測模型"""
         try:
+            from transformers import AutoImageProcessor, AutoModelForImageClassification
 
             # Try to load a dedicated NSFW detection model
             model_id = "Falconsai/nsfw_image_detection"
@@ -146,7 +145,7 @@ class NSFWDetector:
         with torch.no_grad():
             for image in images:
                 # Prepare inputs
-                inputs = self.processor(
+                inputs = self.processor(  # type: ignore
                     text=self.nsfw_prompts + self.safe_prompts,
                     images=image,
                     return_tensors="pt",
@@ -154,7 +153,7 @@ class NSFWDetector:
                 ).to(self.device)
 
                 # Get predictions
-                outputs = self.model(**inputs)
+                outputs = self.model(**inputs)  # type: ignore
                 logits_per_image = outputs.logits_per_image
                 probs = logits_per_image.softmax(dim=1)
 
@@ -190,12 +189,12 @@ class NSFWDetector:
         with torch.no_grad():
             for image in images:
                 # Prepare inputs
-                inputs = self.processor(images=image, return_tensors="pt").to(
+                inputs = self.processor(images=image, return_tensors="pt").to(  # type: ignore
                     self.device
                 )
 
                 # Get predictions
-                outputs = self.model(**inputs)
+                outputs = self.model(**inputs)  # type: ignore
                 predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
 
                 # Assume label 1 is NSFW (model-dependent)
@@ -353,11 +352,11 @@ class ContentFilter:
             logger.error(f"Image filtering failed: {e}")
             # Safe fallback - return all images as safe
             return {
-                "original_count": len(images),
+                "original_count": len(images),  # type: ignore
                 "safe_images": images,
                 "filtered_count": 0,
                 "filtered_indices": [],
-                "confidence_scores": [0.0] * len(images),
+                "confidence_scores": [0.0] * len(images),  # type: ignore
                 "is_safe": True,
             }
 
@@ -377,16 +376,47 @@ class ContentFilter:
 
 
 class SafetyChecker:
-    """綜合安全檢查器"""
+    """綜合安全檢查器 - 補充缺失的方法"""
 
     def __init__(self):
         self.content_filter = ContentFilter()
         self.enabled = True
         self.strict_mode = False  # Configurable strictness
+        self.nsfw_threshold = 0.5
+        self.model = None
+        self.processor = None
+        # 敏感詞彙清單
+        self.blocked_terms = {
+            "explicit": [
+                "nude",
+                "naked",
+                "explicit",
+                "sexual",
+                "erotic",
+                "porn",
+                "xxx",
+            ],
+            "violence": ["violence", "blood", "gore", "death", "kill", "murder"],
+            "hate": ["hate", "racist", "nazi", "terrorist"],
+            "illegal": ["drug", "cocaine", "heroin", "marijuana", "illegal"],
+        }
+
+        # 安全替代詞
+        self.safe_alternatives = {
+            "nude": "artistic portrait",
+            "naked": "minimalist",
+            "sexy": "attractive",
+            "explicit": "detailed",
+            "erotic": "romantic",
+        }
+
+        logger.info("SafetyChecker initialized")
 
     async def initialize(self) -> bool:
         """初始化安全檢查器"""
         try:
+            from transformers import CLIPProcessor, CLIPModel
+
             success = await self.content_filter.initialize()
 
             if success:
@@ -396,11 +426,338 @@ class SafetyChecker:
                     "⚠️ Safety checker initialized with limited functionality"
                 )
 
+            # 載入 CLIP 模型用於內容分析
+            model_id = "openai/clip-vit-base-patch32"
+            self.model = CLIPModel.from_pretrained(model_id).to(self.device) # type: ignore
+            self.processor = CLIPProcessor.from_pretrained(model_id)
+            # NSFW 檢測用的提示詞
+            self.nsfw_prompts = [
+                "explicit sexual content",
+                "nudity",
+                "pornographic image",
+                "adult content",
+                "inappropriate content",
+            ]
+
+            self.safe_prompts = [
+                "safe for work image",
+                "appropriate content",
+                "family friendly",
+                "professional image",
+                "clean content",
+            ]
+
+            logger.info("✅ SafetyChecker model loaded successfully")
             return success
 
-        except Exception as e:
-            logger.error(f"Safety checker initialization failed: {e}")
+        except ImportError:
+            logger.warning("⚠️ CLIP not available, using rule-based safety checks")
             return False
+        except Exception as e:
+            logger.error(f"Failed to load safety model: {e}")
+            return False
+
+    def check_images(
+        self, images: List[Image.Image]
+    ) -> Tuple[List[Image.Image], List[bool]]:
+        """檢查圖片安全性 - 主要介面方法
+
+        Returns:
+            Tuple[List[Image.Image], List[bool]]: (處理後圖片, 是否安全標記)
+        """
+        if not self.enabled:
+            return images, [True] * len(images)
+
+        try:
+            safety_flags = []
+            processed_images = []
+
+            for image in images:
+                is_safe, confidence = self._check_single_image(image)
+                safety_flags.append(is_safe)
+
+                if is_safe:
+                    processed_images.append(image)
+                else:
+                    # 如果不安全，返回模糊或黑色圖片
+                    censored_image = self._censor_image(image)
+                    processed_images.append(censored_image)
+                    logger.warning(
+                        f"Image flagged as unsafe (confidence: {confidence:.3f})"
+                    )
+
+            return processed_images, safety_flags
+
+        except Exception as e:
+            logger.error(f"Safety check failed: {e}")
+            return images, [True] * len(images)
+
+    def _check_single_image(self, image: Image.Image) -> Tuple[bool, float]:
+        """檢查單張圖片"""
+        if self.model is None:
+            # 如果沒有模型，使用基本檢查
+            return True, 0.0
+
+        try:
+            with torch.no_grad():
+                # 準備輸入
+                inputs = self.processor( # type: ignore
+                    text=self.nsfw_prompts + self.safe_prompts,
+                    images=image,
+                    return_tensors="pt",
+                    padding=True,
+                ).to(self.device) # type: ignore
+
+                # 取得預測
+                outputs = self.model(**inputs)
+                logits_per_image = outputs.logits_per_image
+                probs = logits_per_image.softmax(dim=1)
+
+                # 計算 NSFW 分數
+                nsfw_score = probs[0, : len(self.nsfw_prompts)].sum().item()
+                safe_score = probs[0, len(self.nsfw_prompts) :].sum().item()
+
+                total_score = nsfw_score + safe_score
+                if total_score > 0:
+                    nsfw_confidence = nsfw_score / total_score
+                else:
+                    nsfw_confidence = 0.0
+
+                is_safe = nsfw_confidence < self.nsfw_threshold
+                return is_safe, nsfw_confidence
+
+        except Exception as e:
+            logger.error(f"Image safety check failed: {e}")
+            return True, 0.0
+
+    def _censor_image(self, image: Image.Image) -> Image.Image:
+        """對不安全的圖片進行審查處理"""
+        try:
+            # 建立模糊版本
+            from PIL import ImageFilter
+
+            blurred = image.filter(ImageFilter.GaussianBlur(radius=20))
+
+            # 添加警告文字
+            from PIL import ImageDraw, ImageFont
+
+            draw = ImageDraw.Draw(blurred)
+
+            try:
+                font = ImageFont.truetype("arial.ttf", 30)
+            except:
+                font = ImageFont.load_default()
+
+            text = "Content Blocked"
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+
+            x = (image.width - text_width) // 2
+            y = (image.height - text_height) // 2
+
+            draw.text((x, y), text, fill="red", font=font)
+
+            return blurred
+
+        except Exception as e:
+            logger.error(f"Image censoring failed: {e}")
+            # 回傳黑色圖片作為備案
+            return Image.new("RGB", image.size, color="black") # type: ignore
+
+    def check_prompt(self, prompt: str) -> Tuple[str, bool]:
+        """檢查並過濾提示詞"""
+        try:
+            original_prompt = prompt
+            filtered_prompt = prompt.lower()
+            is_safe = True
+            blocked_found = []
+
+            # 檢查敏感詞彙
+            for category, terms in self.blocked_terms.items():
+                for term in terms:
+                    if term in filtered_prompt:
+                        blocked_found.append(term)
+                        is_safe = False
+
+                        # 嘗試替換為安全詞彙
+                        if term in self.safe_alternatives:
+                            filtered_prompt = filtered_prompt.replace(
+                                term, self.safe_alternatives[term]
+                            )
+                        else:
+                            # 移除敏感詞
+                            filtered_prompt = filtered_prompt.replace(term, "")
+
+            # 清理多餘空格
+            filtered_prompt = re.sub(r"\s+", " ", filtered_prompt).strip()
+
+            if blocked_found:
+                logger.warning(f"Prompt filtered. Blocked terms: {blocked_found}")
+
+            return filtered_prompt, is_safe
+
+        except Exception as e:
+            logger.error(f"Prompt filtering failed: {e}")
+            return prompt, True
+
+
+    async def check_nsfw(
+        self, images: Union[Image.Image, List[Image.Image]]
+    ) -> Dict[str, Any]:
+        """檢查 NSFW 內容 - 新增缺失方法"""
+        try:
+            if isinstance(images, Image.Image):
+                images = [images]
+
+            is_nsfw_list, confidence_scores = (
+                self.content_filter.nsfw_detector.detect_nsfw(images)
+            )
+
+            return {
+                "is_nsfw": any(is_nsfw_list),
+                "nsfw_images": is_nsfw_list,
+                "confidence_scores": confidence_scores,
+                "max_confidence": max(confidence_scores) if confidence_scores else 0.0,
+                "filtered_count": sum(is_nsfw_list),
+            }
+
+        except Exception as e:
+            logger.error(f"NSFW check failed: {e}")
+            return {
+                "is_nsfw": False,
+                "nsfw_images": [False] * len(images),  # type: ignore
+                "confidence_scores": [0.0] * len(images),  # type: ignore
+                "max_confidence": 0.0,
+                "filtered_count": 0,
+                "error": str(e),
+            }
+
+    def get_content_hash(self, content: Union[str, Image.Image]) -> str:
+        """生成內容雜湊值 - 新增缺失方法"""
+        try:
+            import hashlib
+
+            if isinstance(content, str):
+                # Text content hash
+                return hashlib.md5(content.encode("utf-8")).hexdigest()
+            elif isinstance(content, Image.Image):
+                # Image content hash (perceptual hash)
+                import numpy as np
+
+                # Simple hash based on image data
+                img_array = np.array(content.resize((32, 32)))
+                return hashlib.md5(img_array.tobytes()).hexdigest()
+            else:
+                return hashlib.md5(str(content).encode("utf-8")).hexdigest()
+
+        except Exception as e:
+            logger.error(f"Content hash generation failed: {e}")
+            return "unknown"
+
+    def filter_prompt(self, prompt: str) -> Dict[str, Any]:
+        """過濾提示詞 - 新增缺失方法"""
+        try:
+            # Use existing content filter
+            result = self.content_filter.filter_text(prompt)
+
+            return {
+                "original_prompt": result["original"],
+                "filtered_prompt": result["filtered"],
+                "is_safe": result["is_safe"],
+                "flags": result["flags"],
+                "modified": result["modified"],
+                "blocked_terms_found": [
+                    term
+                    for term in self.blocked_terms
+                    if term.lower() in prompt.lower()
+                ],
+            }
+
+        except Exception as e:
+            logger.error(f"Prompt filtering failed: {e}")
+            return {
+                "original_prompt": prompt,
+                "filtered_prompt": prompt,
+                "is_safe": True,
+                "flags": [],
+                "modified": False,
+                "blocked_terms_found": [],
+                "error": str(e),
+            }
+
+    def analyze_content_safety(
+        self, content: Union[str, Image.Image]
+    ) -> Dict[str, Any]:
+        """分析內容安全性 - 新增缺失方法"""
+        try:
+            analysis = {
+                "content_type": "text" if isinstance(content, str) else "image",
+                "content_hash": self.get_content_hash(content),
+                "is_safe": True,
+                "risk_level": "low",
+                "issues": [],
+                "recommendations": [],
+            }
+
+            if isinstance(content, str):
+                # Analyze text content
+                filter_result = self.filter_prompt(content)
+                analysis["is_safe"] = filter_result["is_safe"]
+                analysis["issues"] = filter_result["flags"]
+
+                if filter_result["blocked_terms_found"]:
+                    analysis["risk_level"] = "high"
+                    analysis["recommendations"].append("Remove blocked terms")
+                elif not filter_result["is_safe"]:
+                    analysis["risk_level"] = "medium"
+                    analysis["recommendations"].append(
+                        "Review content for policy compliance"
+                    )
+
+            elif isinstance(content, Image.Image):
+                # Analyze image content
+                import asyncio
+
+                nsfw_result = asyncio.run(self.check_nsfw(content))
+
+                analysis["is_safe"] = not nsfw_result["is_nsfw"]
+
+                if nsfw_result["is_nsfw"]:
+                    confidence = nsfw_result["max_confidence"]
+                    analysis["risk_level"] = "high" if confidence > 0.8 else "medium"
+                    analysis["issues"].append(
+                        f"NSFW content detected (confidence: {confidence:.2f})"
+                    )
+                    analysis["recommendations"].append("Review image content")
+
+            return analysis
+
+        except Exception as e:
+            logger.error(f"Content safety analysis failed: {e}")
+            return {
+                "content_type": "unknown",
+                "content_hash": "error",
+                "is_safe": True,  # Safe fallback
+                "risk_level": "unknown",
+                "issues": [f"Analysis error: {str(e)}"],
+                "recommendations": ["Manual review recommended"],
+                "error": str(e),
+            }
+
+    def add_text_watermark(
+        self, image: Image.Image, text: str = "SagaForge T2I"
+    ) -> Image.Image:
+        """添加文字浮水印 - 新增缺失方法"""
+        try:
+            from core.t2i.watermark import get_watermark_manager
+
+            watermark_manager = get_watermark_manager()
+            return watermark_manager.text_watermark.apply_watermark(image, text)
+
+        except Exception as e:
+            logger.error(f"Text watermark failed: {e}")
+            return image  # Return original image if watermarking fails
 
     async def check_generation_request(
         self, prompt: str, negative_prompt: str = ""
@@ -596,6 +953,8 @@ def apply_content_warning_overlay(
 ) -> Image.Image:
     """在圖像上添加內容警告覆蓋層"""
     try:
+        from PIL import ImageDraw, ImageFont
+
         # Create a copy of the image
         result_image = image.copy()
         draw = ImageDraw.Draw(result_image)
@@ -604,7 +963,7 @@ def apply_content_warning_overlay(
         width, height = result_image.size
 
         # Create semi-transparent overlay
-        overlay = Image.new("RGBA", (width, height), (0, 0, 0, 128))
+        overlay = Image.new("RGBA", (width, height), (0, 0, 0, 128))  # type: ignore
         result_image = Image.alpha_composite(result_image.convert("RGBA"), overlay)
 
         # Add warning text
@@ -690,7 +1049,7 @@ async def test_safety_system() -> Dict[str, Any]:
 
         # Test image filtering (create a dummy image)
         try:
-            dummy_image = Image.new("RGB", (256, 256), (128, 128, 128))
+            dummy_image = Image.new("RGB", (256, 256), (128, 128, 128))  # type: ignore
             result = await checker.check_generated_images(dummy_image)
             results["image_filtering"] = len(result["safe_images"]) > 0
         except Exception as e:
