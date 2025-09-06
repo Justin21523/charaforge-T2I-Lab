@@ -37,7 +37,7 @@ for k, v in {
     os.environ[k] = v
     pathlib.Path(v).mkdir(parents=True, exist_ok=True)
 
-from .utils.logging import setup_logging, get_logger
+from ..utils.logging import setup_logger, get_logger
 
 logger = get_logger(__name__)
 
@@ -371,7 +371,7 @@ def main():
     args = parser.parse_args()
 
     # Setup logging
-    setup_logging()
+    # setup_logger()
     logger = get_logger(__name__)
 
     if args.verbose:
