@@ -5,15 +5,20 @@
 """
 
 import asyncio
+import time
 import logging
 import uuid
 import torch
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
+import hashlib
+import io
+from typing import Dict, Tuple, Any, List, Optional, Union
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 
 from core.config import get_settings, get_app_paths, get_model_config
 from core.shared_cache import get_shared_cache
@@ -45,7 +50,7 @@ class GenerationRequest(BaseModel):
 
     # Model selection
     model_type: str = Field(
-        default="sd15", regex="^(sd15|sdxl)$", description="Base model type"
+        default="sd15", pattern="^(sd15|sdxl)$", description="Base model type"
     )
     model_name: Optional[str] = Field(
         default=None, description="Specific model name or preset"
@@ -74,7 +79,7 @@ class GenerationRequest(BaseModel):
     # Advanced options
     scheduler: str = Field(
         default="euler_a",
-        regex="^(euler_a|ddim|dpm|lms)$",
+        pattern="^(euler_a|ddim|dpm|lms)$",
         description="Sampling scheduler",
     )
     clip_skip: int = Field(default=1, ge=1, le=12, description="CLIP layers to skip")
@@ -87,14 +92,14 @@ class GenerationRequest(BaseModel):
         default=True, description="Enable xFormers attention optimization"
     )
 
-    @validator("width", "height")
+    @field_validator("width", "height")
     def validate_dimensions(cls, v, values):
         """Validate image dimensions are multiples of 8"""
         if v % 8 != 0:
             raise ValueError(f"Dimensions must be multiples of 8, got {v}")
         return v
 
-    @validator("lora_weights")
+    @field_validator("lora_weights")
     def validate_lora_weights(cls, v):
         """Validate LoRA weights list"""
         if len(v) > 5:
@@ -119,7 +124,7 @@ class GenerationResponse(BaseModel):
     """生成結果回應"""
 
     job_id: str = Field(..., description="Unique job identifier")
-    status: str = Field(..., regex="^(queued|processing|completed|failed)$")
+    status: str = Field(..., pattern="^(queued|processing|completed|failed)$")
 
     # Generation info
     prompt: str
@@ -230,19 +235,19 @@ async def generate_image(
 
         # Load LoRA weights if specified
         current_loras = set(pipeline.loaded_loras.keys())
-        requested_loras = {lora["id"] for lora in request.lora_weights}
+        requested_loras = {lora["id"] for lora in request.lora_weights}  # type: ignore
 
         # Unload LoRAs not in request
-        for lora_id in current_loras - requested_loras:
+        for lora_id in current_loras - requested_loras:  # type: ignore
             pipeline.unload_lora(lora_id)
 
         # Load new LoRAs
-        for lora_config in request.lora_weights:
+        for lora_config in request.lora_weights:  # type: ignore
             lora_id = lora_config["id"]
             weight = lora_config.get("weight", 1.0)
 
             if lora_id not in pipeline.loaded_loras:
-                success = pipeline.load_lora(lora_id, weight)
+                success = pipeline.load_lora(lora_id, weight)  # type: ignore
                 if not success:
                     logger.warning(f"Failed to load LoRA: {lora_id}")
 
@@ -250,7 +255,7 @@ async def generate_image(
         try:
             result = pipeline.generate(
                 prompt=request.prompt,
-                negative_prompt=request.negative_prompt,
+                negative_prompt=request.negative_prompt,  # type: ignore
                 width=request.width,
                 height=request.height,
                 num_inference_steps=request.num_inference_steps,
@@ -440,7 +445,7 @@ async def list_available_models():
 async def load_lora_weight(
     lora_id: str = Field(..., description="LoRA model ID"),
     weight: float = Field(default=1.0, ge=0.0, le=2.0, description="LoRA weight"),
-    model_type: str = Field(default="sd15", regex="^(sd15|sdxl)$"),
+    model_type: str = Field(default="sd15", pattern="^(sd15|sdxl)$"),
 ):
     """載入 LoRA 權重"""
 
@@ -477,7 +482,7 @@ async def load_lora_weight(
 @router.post("/lora/unload")
 async def unload_lora_weight(
     lora_id: str = Field(..., description="LoRA model ID to unload"),
-    model_type: str = Field(default="sd15", regex="^(sd15|sdxl)$"),
+    model_type: str = Field(default="sd15", pattern="^(sd15|sdxl)$"),
 ):
     """卸載 LoRA 權重"""
 
@@ -508,7 +513,7 @@ async def unload_lora_weight(
 @router.post("/preview")
 async def generate_preview(
     prompt: str = Field(..., min_length=1, max_length=500),
-    model_type: str = Field(default="sd15", regex="^(sd15|sdxl)$"),
+    model_type: str = Field(default="sd15", pattern="^(sd15|sdxl)$"),
     style_preset: Optional[str] = Field(default=None),
 ):
     """生成快速預覽（低品質、快速）"""

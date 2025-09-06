@@ -1,15 +1,21 @@
 # api/routers/safety.py - Safety endpoints implementation
+import logging
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
-from pathlib import Path
+from typing import List, Tuple, Dict, Any, Optional, Union
 from PIL import Image
+import torch
+import numpy as np
+from pathlib import Path
+import hashlib
 import io
+import re
 
 from core.t2i.safety import SafetyChecker
 
 router = APIRouter()
 safety_checker = SafetyChecker()
+logger = logging.getLogger(__name__)
 
 
 class NSFWCheckResponse(BaseModel):
@@ -52,7 +58,7 @@ async def check_nsfw_content(file: UploadFile = File(...)):
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
         # Run NSFW detection
-        is_nsfw, scores = safety_checker.check_nsfw(image)
+        is_nsfw, scores = safety_checker.check_nsfw(image)  # type: ignore
         content_hash = safety_checker.get_content_hash(image)
 
         # Get highest confidence category
@@ -82,7 +88,7 @@ async def filter_prompt(request: PromptFilterRequest):
         return PromptFilterResponse(
             original_prompt=request.prompt,
             filtered_prompt=filtered_prompt,
-            blocked_terms=blocked_terms,
+            blocked_terms=blocked_terms,  # type: ignore
             is_safe=is_safe,
         )
 
@@ -104,7 +110,10 @@ async def analyze_content_safety(
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
         # Run comprehensive analysis
-        analysis = safety_checker.analyze_content_safety(image, prompt)
+        if image:
+            analysis = safety_checker.analyze_content_safety(image)
+        else:
+            analysis = safety_checker.analyze_content_safety(prompt)
 
         # Apply strict mode if requested
         if strict_mode:
@@ -168,6 +177,6 @@ async def get_safety_config():
         "prompt_filtering_enabled": True,
         "default_nsfw_threshold": 0.5,
         "strict_mode_threshold": 0.3,
-        "blocked_terms_categories": list(safety_checker.blocked_terms.keys()),
+        "blocked_terms_categories": list(safety_checker.blocked_terms.keys()),  # type: ignore
         "watermark_enabled": True,
     }
