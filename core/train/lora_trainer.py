@@ -6,19 +6,25 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import torch, os, math, time
+import torch.nn.functional as F
 import numpy as np
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
+from PIL import Image
 
 # Diffusers and training imports
-from diffusers import (
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
     StableDiffusionPipeline,
-    StableDiffusionXLPipeline,
-    DDPMScheduler,
-    UNet2DConditionModel,
 )
+from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
+    StableDiffusionXLPipeline,
+)
+from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
+
 from diffusers.optimization import get_scheduler
-from diffusers.utils import check_min_version, is_wandb_available
+from diffusers.utils.import_utils import is_wandb_available
+from diffusers.utils import check_min_version
 
 # PEFT and LoRA imports
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
@@ -31,7 +37,7 @@ from accelerate.utils import ProjectConfiguration, set_seed
 # Transformers
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
-from core.config import get_run_output_dir, get_cache_paths, get_model_path
+from core.config import get_run_output_dir, get_cache_paths
 from core.train.dataset import T2IDataset
 from core.train.evaluators import CLIPEvaluator, FaceConsistencyEvaluator
 
@@ -165,7 +171,7 @@ class LoRATrainer:
             )
 
         # Load VAE
-        from diffusers import AutoencoderKL
+        from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
         self.vae = AutoencoderKL.from_pretrained(
             self.base_model,
@@ -242,7 +248,7 @@ class LoRATrainer:
             ),
             lora_dropout=self.config.get("lora_dropout", 0.1),
             bias="none",
-            task_type=TaskType.DIFFUSION_IMAGE_GENERATION,
+            task_type=TaskType.DIFFUSION,  # type: ignore
         )
 
         # Apply LoRA to UNet
@@ -344,7 +350,7 @@ class LoRATrainer:
                         params_to_clip = self.unet.parameters()
                         self.accelerator.clip_grad_norm_(
                             params_to_clip, self.config["max_grad_norm"]
-                        ) aj4u
+                        )
 
                     optimizer.step()
                     lr_scheduler.step()
@@ -483,10 +489,10 @@ class LoRATrainer:
     def _encode_prompt(self, prompts: List[str]) -> torch.Tensor:
         """Encode text prompts"""
         # Tokenize
-        text_inputs = self.tokenizer(
+        text_inputs = self.tokenizer(  # type: ignore
             prompts,
             padding="max_length",
-            max_length=self.tokenizer.model_max_length,
+            max_length=self.tokenizer.model_max_length,  # type: ignore
             truncation=True,
             return_tensors="pt",
         )
@@ -494,7 +500,7 @@ class LoRATrainer:
         text_input_ids = text_inputs.input_ids.to(self.accelerator.device)
 
         # Encode with text encoder
-        text_embeddings = self.text_encoder(text_input_ids)[0]
+        text_embeddings = self.text_encoder(text_input_ids)[0]  # type: ignore
 
         # For SDXL, also encode with second text encoder
         if self.is_sdxl:
@@ -507,7 +513,7 @@ class LoRATrainer:
             )
 
             text_input_ids_2 = text_inputs_2.input_ids.to(self.accelerator.device)
-            text_embeddings_2 = self.text_encoder_2(text_input_ids_2)[0]
+            text_embeddings_2 = self.text_encoder_2(text_input_ids_2)[0]  # type: ignore
 
             # Concatenate embeddings
             text_embeddings = torch.cat([text_embeddings, text_embeddings_2], dim=-1)
@@ -517,7 +523,7 @@ class LoRATrainer:
     def _setup_optimizer(self) -> torch.optim.Optimizer:
         """Setup optimizer for training"""
         # Get trainable parameters
-        params_to_optimize = self.unet.parameters()
+        params_to_optimize = self.unet.parameters()  # type: ignore
 
         # Choose optimizer
         optimizer_name = self.config.get("optimizer", "adamw")
@@ -573,7 +579,7 @@ class LoRATrainer:
 
     def _compute_snr(self, timesteps):
         """Compute signal-to-noise ratio for timesteps"""
-        alphas_cumprod = self.noise_scheduler.alphas_cumprod
+        alphas_cumprod = self.noise_scheduler.alphas_cumprod  # type: ignore
         sqrt_alphas_cumprod = alphas_cumprod**0.5
         sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
 
@@ -621,7 +627,7 @@ class LoRATrainer:
             json.dump(state, f, indent=2)
 
         # Save accelerator state
-        self.accelerator.save_state(checkpoint_dir / "accelerator_state")
+        self.accelerator.save_state(checkpoint_dir / "accelerator_state")  # type: ignore
 
         self.logger.info(f"Saved checkpoint: {checkpoint_name}")
 
@@ -652,7 +658,9 @@ class LoRATrainer:
                     num_inference_steps=25,
                     guidance_scale=7.5,
                     generator=torch.Generator().manual_seed(42),
-                ).images[0]
+                ).images[  # type: ignore
+                    0
+                ]
 
                 sample_path = samples_dir / f"sample_{i:02d}.png"
                 image.save(sample_path)
@@ -698,12 +706,8 @@ class LoRATrainer:
         """Create inference pipeline for validation"""
         try:
             if self.is_sdxl:
-                from diffusers import StableDiffusionXLPipeline
-
                 pipeline_class = StableDiffusionXLPipeline
             else:
-                from diffusers import StableDiffusionPipeline
-
                 pipeline_class = StableDiffusionPipeline
 
             # Create pipeline with current LoRA weights
