@@ -275,7 +275,7 @@ class SharedCache:
                                 size_mb = file_path.stat().st_size / (1024 * 1024)
                                 file_path.unlink()
                                 cleanup_stats["files"] += 1
-                                cleanup_stats["size_freed_mb"] += size_mb
+                                cleanup_stats["size_freed_mb"] += size_mb  # type: ignore
                         except Exception:
                             continue
 

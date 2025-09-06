@@ -7,6 +7,7 @@
 import logging
 import traceback
 from typing import Any, Optional, Dict, List
+from collections import Counter
 from functools import wraps
 
 logger = logging.getLogger(__name__)
@@ -520,7 +521,7 @@ def validate_required(value: Any, field_name: str):
 
 
 def validate_range(
-    value: float, field_name: str, min_val: float = None, max_val: float = None
+    value: float, field_name: str, min_val: float = None, max_val: float = None  # type: ignore
 ):
     """驗證數值範圍"""
     if min_val is not None and value < min_val:

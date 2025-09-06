@@ -184,7 +184,7 @@ class ResourceMonitor:
                         pynvml.nvmlInit()
                         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
                         utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                        metrics.gpu_utilization_percent = utilization.gpu
+                        metrics.gpu_utilization_percent = utilization.gpu  # type: ignore
                     except ImportError:
                         pass
 
@@ -476,7 +476,7 @@ def memory_cleanup_decorator(cleanup_after: bool = True, cleanup_before: bool = 
     return decorator
 
 
-def performance_monitor_decorator(monitor_name: str = None):
+def performance_monitor_decorator(monitor_name: str = None):  # type: ignore
     """效能監控裝飾器"""
 
     def decorator(func):
