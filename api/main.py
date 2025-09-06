@@ -1,7 +1,7 @@
-# api/main.py - CharaForge T2I Lab Main API
+# api/main.py - Updated FastAPI Application
 """
-CharaForge T2I Lab 主要 API 入口
-整合統一的配置、快取、效能監控和例外處理系統
+SagaForge T2I Lab 主要 API 入口 - 重構版
+整合統一的配置、快取、路由和錯誤處理系統
 """
 
 import sys
@@ -20,70 +20,65 @@ sys.path.insert(0, str(ROOT_DIR))
 
 # 導入核心模組
 try:
-    from core.config import get_settings, get_cache_paths, validate_cache_setup
+    from core.config import get_settings, bootstrap_config
     from core.shared_cache import bootstrap_cache
     from core.performance import get_resource_monitor, get_system_performance_summary
-    from core.exceptions import (
-        CharaForgeError,
-        ServiceUnavailableError,
-        handle_errors,
-        global_error_reporter,
-    )
+    from core.exceptions import CharaForgeError, handle_errors, global_error_reporter
 
     CORE_MODULES_AVAILABLE = True
 except ImportError as e:
     print(f"❌ Core modules import failed: {e}")
     CORE_MODULES_AVAILABLE = False
 
-# 導入 API 路由（有容錯處理）
+# 導入 API 路由 (有容錯處理)
 available_routers = {}
 
 try:
-    from api.routers import health
+    from api.routers.health import router as health_router
 
-    available_routers["health"] = health.router
+    available_routers["health"] = health_router
 except ImportError as e:
     print(f"⚠️  Health router not available: {e}")
 
 try:
-    from api.routers import t2i
+    from api.routers.t2i import router as t2i_router
 
-    available_routers["t2i"] = t2i.router
+    available_routers["t2i"] = t2i_router
 except ImportError as e:
     print(f"⚠️  T2I router not available: {e}")
 
 try:
-    from api.routers import finetune
+    from api.routers.finetune import router as finetune_router
 
-    available_routers["finetune"] = finetune.router
+    available_routers["finetune"] = finetune_router
 except ImportError as e:
     print(f"⚠️  Finetune router not available: {e}")
 
 try:
-    from api.routers import batch
+    from api.routers.batch import router as batch_router
 
-    available_routers["batch"] = batch.router
+    available_routers["batch"] = batch_router
 except ImportError as e:
     print(f"⚠️  Batch router not available: {e}")
 
 try:
-    from api.routers import export
+    from api.routers.export import router as export_router
 
-    available_routers["export"] = export.router
+    available_routers["export"] = export_router
 except ImportError as e:
     print(f"⚠️  Export router not available: {e}")
 
 try:
-    from api.routers import safety
+    from api.routers.safety import router as safety_router
 
-    available_routers["safety"] = safety.router
+    available_routers["safety"] = safety_router
 except ImportError as e:
     print(f"⚠️  Safety router not available: {e}")
 
 try:
-    from api.routers import monitoring
+    from api.routers.monitoring import router as monitoring_router
 
-    available_routers["monitoring"] = monitoring.router
+    available_routers["monitoring"] = monitoring_router
 except ImportError as e:
     print(f"⚠️  Monitoring router not available: {e}")
 
@@ -97,31 +92,40 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """應用程式生命週期管理"""
-    logger.info("🚀 Starting CharaForge T2I Lab API...")
+    logger.info("🚀 Starting SagaForge T2I Lab API...")
 
-    startup_status = {"core_modules": False, "cache": False, "monitoring": False}
+    startup_status = {
+        "core_modules": False,
+        "config": False,
+        "cache": False,
+        "monitoring": False,
+        "celery_connection": False,
+    }
 
     # 1. 檢查核心模組
     if CORE_MODULES_AVAILABLE:
         startup_status["core_modules"] = True
         logger.info("✅ Core modules loaded successfully")
 
-        # 2. 初始化共用快取
+        # 2. 初始化配置系統
+        try:
+            config_summary = bootstrap_config(verbose=True)
+            startup_status["config"] = True
+            logger.info("✅ Configuration system initialized")
+        except Exception as e:
+            logger.error(f"❌ Configuration initialization failed: {e}")
+            startup_status["config"] = False
+
+        # 3. 初始化共用快取
         try:
             cache = bootstrap_cache(verbose=True)
-            validation = validate_cache_setup()
-            startup_status["cache"] = validation.get("status") == "healthy"
-
-            if startup_status["cache"]:
-                logger.info("✅ Shared cache initialized successfully")
-            else:
-                logger.warning("⚠️  Cache initialization issues detected")
-
+            startup_status["cache"] = True
+            logger.info("✅ Shared cache initialized successfully")
         except Exception as e:
             logger.error(f"❌ Cache initialization failed: {e}")
             startup_status["cache"] = False
 
-        # 3. 啟動效能監控
+        # 4. 啟動效能監控
         try:
             monitor = get_resource_monitor()
             startup_status["monitoring"] = True
@@ -130,13 +134,28 @@ async def lifespan(app: FastAPI):
             logger.error(f"❌ Performance monitoring failed: {e}")
             startup_status["monitoring"] = False
 
+        # 5. 檢查 Celery 連接
+        try:
+            from workers.celery_app import health_check
+
+            celery_health = health_check()
+            startup_status["celery_connection"] = celery_health["status"] == "healthy"
+
+            if startup_status["celery_connection"]:
+                logger.info("✅ Celery workers available")
+            else:
+                logger.warning("⚠️  Celery workers not available - async tasks disabled")
+        except Exception as e:
+            logger.warning(f"⚠️  Celery connection check failed: {e}")
+            startup_status["celery_connection"] = False
+
     else:
         logger.error("❌ Core modules not available - running in degraded mode")
 
-    # 4. 檢查可用路由
+    # 6. 檢查可用路由
     logger.info(f"📍 Available routers: {list(available_routers.keys())}")
 
-    # 5. 系統狀態摘要
+    # 7. 系統狀態摘要
     app.state.startup_status = startup_status
     app.state.available_routers = list(available_routers.keys())
 
@@ -147,12 +166,24 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-    logger.info("🎯 CharaForge T2I Lab API startup completed")
+    # 8. 系統健康狀態
+    healthy_components = sum(startup_status.values())
+    total_components = len(startup_status)
+    health_percentage = (healthy_components / total_components) * 100
+
+    if health_percentage >= 80:
+        logger.info(
+            f"🎯 SagaForge T2I Lab API startup completed ({health_percentage:.0f}% healthy)"
+        )
+    else:
+        logger.warning(
+            f"⚠️  SagaForge T2I Lab API running in degraded mode ({health_percentage:.0f}% healthy)"
+        )
 
     yield
 
     # 清理
-    logger.info("🛑 Shutting down CharaForge T2I Lab API...")
+    logger.info("🛑 Shutting down SagaForge T2I Lab API...")
 
     if CORE_MODULES_AVAILABLE:
         try:
@@ -166,9 +197,9 @@ async def lifespan(app: FastAPI):
 
 # 建立 FastAPI 應用程式
 app = FastAPI(
-    title="CharaForge T2I Lab",
-    description="Text-to-Image generation and LoRA fine-tuning API",
-    version="0.1.0",
+    title="SagaForge T2I Lab",
+    description="Text-to-Image generation and LoRA fine-tuning API with advanced training capabilities",
+    version="0.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -180,7 +211,15 @@ if CORE_MODULES_AVAILABLE:
 else:
     # 基本設定回退
     class BasicSettings:
-        api_cors_origins = "http://localhost:3000,http://127.0.0.1:3000"
+        api = type(
+            "api",
+            (),
+            {
+                "cors_origins": "http://localhost:3000,http://127.0.0.1:3000",
+                "host": "0.0.0.0",
+                "port": 8000,
+            },
+        )()
         debug = False
 
     settings = BasicSettings()
@@ -188,7 +227,7 @@ else:
 # CORS 中介軟體
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.api_cors_origins.split(","),
+    allow_origins=settings.api.cors_origins.split(","),  # type: ignore
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -202,79 +241,99 @@ for router_name, router in available_routers.items():
     if router_name == "health":
         app.include_router(router, tags=["health"])
     else:
-        app.include_router(router, prefix="/api/v1", tags=[router_name])
-    logger.info(f"📌 Included router: {router_name}")
+        app.include_router(router, tags=[router_name])
 
 
+# 根路由
 @app.get("/")
 async def root():
-    """根端點 - 系統資訊"""
-    system_info = {
-        "name": "CharaForge T2I Lab",
-        "version": "0.1.0",
+    """API 根端點"""
+    return {
+        "name": "SagaForge T2I Lab",
+        "version": "0.2.0",
+        "description": "Text-to-Image generation and LoRA fine-tuning API",
+        "available_endpoints": {
+            "health": "/healthz",
+            "docs": "/docs",
+            "t2i": "/t2i/*",
+            "finetune": "/finetune/*",
+            "monitoring": "/monitoring/*",
+        },
         "status": "running",
-        "docs": "/docs",
-        "health": "/healthz",
-        "available_features": list(available_routers.keys()),
-        "core_modules_available": CORE_MODULES_AVAILABLE,
+        "available_routers": getattr(app.state, "available_routers", []),
     }
 
-    # 添加啟動狀態資訊
-    if hasattr(app.state, "startup_status"):
-        system_info["startup_status"] = app.state.startup_status
 
-    # 添加系統效能資訊（如果可用）
+# 健康檢查端點
+@app.get("/healthz")
+async def health_check():
+    """系統健康檢查"""
+    status = {
+        "status": "healthy",
+        "timestamp": "2025-01-07T00:00:00Z",  # 會被實際時間替換
+        "version": "0.2.0",
+        "environment": "development",
+        "components": {},
+    }
+
     if CORE_MODULES_AVAILABLE:
         try:
-            perf_summary = get_system_performance_summary()
-            system_info["system_health"] = perf_summary["current"]["health_status"]
-            system_info["memory_usage"] = (
-                f"{perf_summary['current']['memory_percent']:.1f}%"
+            from datetime import datetime
+
+            status["timestamp"] = datetime.now().isoformat()
+            status["environment"] = settings.environment  # type: ignore
+
+            # 核心模組狀態
+            startup_status = getattr(app.state, "startup_status", {})
+            status["components"]["core_modules"] = startup_status.get(
+                "core_modules", False
+            )
+            status["components"]["config"] = startup_status.get("config", False)
+            status["components"]["cache"] = startup_status.get("cache", False)
+            status["components"]["monitoring"] = startup_status.get("monitoring", False)
+            status["components"]["celery"] = startup_status.get(
+                "celery_connection", False
             )
 
-            if perf_summary["current"]["gpu_memory_total_gb"] > 0:
-                gpu_usage = (
-                    perf_summary["current"]["gpu_memory_used_gb"]
-                    / perf_summary["current"]["gpu_memory_total_gb"]
-                ) * 100
-                system_info["gpu_memory_usage"] = f"{gpu_usage:.1f}%"
-        except Exception:
-            pass
-
-    return system_info
-
-
-@app.get("/status")
-async def get_system_status():
-    """系統狀態詳細資訊"""
-    status = {
-        "api_version": "0.1.0",
-        "core_modules": CORE_MODULES_AVAILABLE,
-        "available_routers": list(available_routers.keys()),
-        "timestamp": "2024-01-01T00:00:00Z",  # 實際應用中應使用真實時間戳
-    }
-
-    if CORE_MODULES_AVAILABLE:
-        try:
-            # 效能資訊
-            perf_summary = get_system_performance_summary()
-            status["performance"] = perf_summary["current"]
+            # 系統效能
+            try:
+                perf_summary = get_system_performance_summary()
+                status["performance"] = perf_summary["current"]
+            except Exception:
+                status["performance"] = {"status": "unknown"}
 
             # 快取資訊
-            cache_paths = get_cache_paths()
-            status["cache"] = {
-                "root": str(cache_paths.root),
-                "models_dir": str(cache_paths.models),
-                "datasets_dir": str(cache_paths.datasets),
-                "outputs_dir": str(cache_paths.outputs),
-            }
+            try:
+                cache = bootstrap_cache(verbose=False)
+                cache_stats = cache.get_cache_stats()
+                status["cache"] = {
+                    "total_size_gb": cache_stats.get("total_size_gb", 0),
+                    "registered_models": cache_stats.get("registered_models", {}).get(
+                        "total", 0
+                    ),
+                }
+            except Exception:
+                status["cache"] = {"status": "unknown"}
 
             # 錯誤統計
-            error_summary = global_error_reporter.get_error_summary()
-            status["errors"] = error_summary
+            try:
+                error_summary = global_error_reporter.get_error_summary()
+                status["errors"] = error_summary
+            except Exception:
+                status["errors"] = {"total_errors": 0}
+
+            # 判斷整體健康狀態
+            healthy_components = sum(status["components"].values())
+            total_components = len(status["components"])
+
+            if healthy_components < total_components * 0.8:
+                status["status"] = "degraded"
+            elif healthy_components < total_components * 0.5:
+                status["status"] = "unhealthy"
 
         except Exception as e:
             status["error"] = f"Failed to get system status: {e}"
+            status["status"] = "error"
 
     return status
 
@@ -314,68 +373,63 @@ async def general_exception_handler(request: Request, exc: Exception):
 
     # 包裝為 CharaForge 錯誤並報告
     if CORE_MODULES_AVAILABLE:
-        from core.exceptions import CharaForgeError
-
-        wrapped_error = CharaForgeError(
-            f"Internal server error: {str(exc)}",
-            "INTERNAL_ERROR",
-            {"request_path": str(request.url.path)},
-        )
-        global_error_reporter.report_error(wrapped_error)
+        try:
+            wrapped_error = CharaForgeError(
+                f"Internal server error: {str(exc)[:100]}", error_code="INTERNAL_ERROR"
+            )
+            global_error_reporter.report_error(wrapped_error)
+        except Exception:
+            pass
 
     return JSONResponse(
         status_code=500,
         content={
             "error": "INTERNAL_ERROR",
             "message": "An unexpected error occurred",
-            "debug_info": str(exc) if getattr(settings, "debug", False) else None,
+            "detail": str(exc)[:200] if settings.debug else "Internal server error",
         },
     )
 
 
-# 回退健康檢查端點（如果健康路由不可用）
-if "health" not in available_routers:
+# 中介軟體：請求日誌
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """記錄 HTTP 請求"""
+    start_time = time.time()
 
-    @app.get("/healthz")
-    async def fallback_health():
-        """回退健康檢查"""
-        status = {
-            "status": "running",
-            "message": "API is running but health router not available",
-            "core_modules": CORE_MODULES_AVAILABLE,
-            "available_features": list(available_routers.keys()),
-        }
+    response = await call_next(request)
 
-        if CORE_MODULES_AVAILABLE:
-            try:
-                perf_summary = get_system_performance_summary()
-                status["health"] = perf_summary["current"]["health_status"]
-            except Exception:
-                status["health"] = "unknown"
+    process_time = time.time() - start_time
 
-        return status
+    logger.info(
+        f"{request.method} {request.url.path} "
+        f"- {response.status_code} "
+        f"- {process_time:.3f}s"
+    )
+
+    return response
 
 
+# CLI 運行支援
 def create_app():
-    """工廠函數 - 建立應用程式實例"""
+    """創建應用程式實例 (供 ASGI 伺服器使用)"""
     return app
 
 
-# 主程式入口
 if __name__ == "__main__":
-    # 載入設定
-    host = getattr(settings, "api_host", "0.0.0.0")
-    port = getattr(settings, "api_port", 8000)
-    debug = getattr(settings, "debug", False)
+    # 直接運行開發伺服器
+    import time
 
-    logger.info(f"🌟 Starting CharaForge T2I Lab API on {host}:{port}")
-    logger.info(f"📚 API Documentation: http://{host}:{port}/docs")
-    logger.info(f"❤️  Health Check: http://{host}:{port}/healthz")
+    if CORE_MODULES_AVAILABLE:
+        host = settings.api.host  # type: ignore
+        port = settings.api.port  # type: ignore
+        debug = settings.debug
+    else:
+        host = "0.0.0.0"
+        port = 8000
+        debug = True
 
-    uvicorn.run(
-        "api.main:app",
-        host=host,
-        port=port,
-        reload=debug,
-        log_level="info" if not debug else "debug",
-    )
+    print(f"🚀 Starting SagaForge T2I Lab API on {host}:{port}")
+    print(f"📖 API docs available at: http://{host}:{port}/docs")
+
+    uvicorn.run("api.main:app", host=host, port=port, reload=debug, log_level="info")
