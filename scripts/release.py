@@ -4,15 +4,12 @@ SD UI Lab - Release Management Script
 Automates version bumping, tagging, and release preparation
 """
 
-import os
-import sys
-import subprocess
-import json
-import re
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 
 class ReleaseManager:
@@ -139,7 +136,7 @@ class ReleaseManager:
                     changelog_parts.extend(categorized[category_name])
 
             if categorized["🔄 Other Changes"]:
-                changelog_parts.append(f"\n### 🔄 Other Changes\n")
+                changelog_parts.append("\n### 🔄 Other Changes\n")
                 changelog_parts.extend(categorized["🔄 Other Changes"])
 
             return (
@@ -311,7 +308,7 @@ class ReleaseManager:
 
         print(f"\n🎉 Release v{new_version} created successfully!")
         print("\nNext steps:")
-        print(f"1. Push changes: git push origin main")
+        print("1. Push changes: git push origin main")
         print(f"2. Push tags: git push origin v{new_version}")
         print("3. Create GitHub release with changelog")
 

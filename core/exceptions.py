@@ -6,9 +6,9 @@
 
 import logging
 import traceback
-from typing import Any, Optional, Dict, List
 from collections import Counter
 from functools import wraps
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class CUDAOutOfMemoryError(ModelError):
     """CUDA 記憶體不足錯誤"""
 
     def __init__(self, model_name: str = "", allocated_gb: float = 0):
-        message = f"CUDA out of memory"
+        message = "CUDA out of memory"
         if model_name:
             message += f" when loading {model_name}"
         if allocated_gb > 0:
@@ -237,7 +237,7 @@ class NSFWContentError(SafetyError):
     """NSFW 內容錯誤"""
 
     def __init__(self, confidence: float = 0.0):
-        message = f"NSFW content detected"
+        message = "NSFW content detected"
         if confidence > 0:
             message += f" (confidence: {confidence:.2f})"
         super().__init__(message, "image", "NSFW_CONTENT")
@@ -563,7 +563,7 @@ class DatabaseConnectionError(HealthCheckError):
     """資料庫連線錯誤"""
 
     def __init__(self, database_type: str = "redis", reason: str = ""):
-        message = f"Database connection failed"
+        message = "Database connection failed"
         if reason:
             message += f": {reason}"
         super().__init__(database_type, message, "DATABASE_CONNECTION_ERROR")
@@ -799,14 +799,14 @@ if __name__ == "__main__":
         report_error(error)
 
     summary = get_error_summary()
-    print(f"\n📊 Error Summary:")
+    print("\n📊 Error Summary:")
     print(f"   Total errors: {summary['total_errors']}")
     print(f"   Error types: {summary['error_types']}")
     print(f"   Most common: {summary['most_common_errors']}")
 
     # 測試錯誤分析
     analysis = ErrorAnalyzer.analyze_error_pattern(test_errors)
-    print(f"\n🔍 Error Analysis:")
+    print("\n🔍 Error Analysis:")
     print(f"   Unique codes: {analysis['unique_error_codes']}")
     print(f"   Recommendations: {analysis['recommendations']}")
 

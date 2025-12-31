@@ -5,16 +5,14 @@ NSFW 內容檢測與安全過濾系統
 """
 
 import logging
-import torch
-import numpy as np
-from PIL import Image
-from typing import List, Dict, Any, Optional, Tuple, Union
-from pathlib import Path
 import re
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from core.config import get_settings, get_app_paths
-from core.shared_cache import get_shared_cache
-from core.exceptions import SafetyError, NSFWContentError, ContentBlockedError
+import torch
+from PIL import Image
+
+from core.config import get_settings
+from core.exceptions import ContentBlockedError, NSFWContentError
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +47,7 @@ class NSFWDetector:
     def _load_clip_nsfw_model(self) -> bool:
         """載入基於 CLIP 的 NSFW 檢測模型"""
         try:
-            from transformers import CLIPProcessor, CLIPModel
+            from transformers import CLIPModel, CLIPProcessor
 
             # Use CLIP for content analysis
             model_id = "openai/clip-vit-base-patch32"
@@ -415,7 +413,7 @@ class SafetyChecker:
     async def initialize(self) -> bool:
         """初始化安全檢查器"""
         try:
-            from transformers import CLIPProcessor, CLIPModel
+            from transformers import CLIPModel, CLIPProcessor
 
             success = await self.content_filter.initialize()
 
@@ -545,7 +543,7 @@ class SafetyChecker:
 
             try:
                 font = ImageFont.truetype("arial.ttf", 30)
-            except:
+            except Exception:
                 font = ImageFont.load_default()
 
             text = "Content Blocked"
@@ -568,7 +566,6 @@ class SafetyChecker:
     def check_prompt(self, prompt: str) -> Tuple[str, bool]:
         """檢查並過濾提示詞"""
         try:
-            original_prompt = prompt
             filtered_prompt = prompt.lower()
             is_safe = True
             blocked_found = []
@@ -973,7 +970,7 @@ def apply_content_warning_overlay(
         try:
             font_size = max(20, min(width, height) // 20)
             font = ImageFont.truetype("arial.ttf", font_size)
-        except:
+        except Exception:
             font = ImageFont.load_default()
 
         # Calculate text position (center)

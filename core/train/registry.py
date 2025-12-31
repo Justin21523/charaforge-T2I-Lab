@@ -1,21 +1,14 @@
 # core/train/registry.py - Unified model and config registry
-from typing import Dict, List, Optional, Union, Any, Tuple
-from pathlib import Path
+from __future__ import annotations
+
 import json
-import yaml
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
-import torch
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
-    StableDiffusionPipeline,
-)
-from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
-    StableDiffusionXLPipeline,
-)
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from core.config import get_cache_paths, get_model_config
-
+from core.config import get_cache_paths
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +19,7 @@ class ModelEntry:
 
     name: str
     path: str
-    model_type: str  # "sd15", "sdxl", "lora", "embedding"
+    model_type: str  # "sd15", "sdxl", "lora", "controlnet", "embedding"
     size_mb: Optional[float] = None
     description: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -68,8 +61,9 @@ class ModelRegistry:
         # Load existing registries
         self._load_registries()
 
-        # Auto-discover models on initialization
-        self.auto_discover_models()
+        # NOTE: We avoid scanning the filesystem at import time. Use
+        # `scan_filesystem()` (or the `/api/v1/models/scan` endpoint) when you
+        # want to refresh the registry from `/mnt/c/ai_models`.
 
     def _load_registries(self):
         """Load existing registry files"""
@@ -131,115 +125,202 @@ class ModelRegistry:
         except Exception as e:
             logger.error(f"Error saving registries: {e}")
 
-    def auto_discover_models(self):
-        """Auto-discover models in cache directories"""
-        logger.info("Auto-discovering models...")
+    def scan_filesystem(self, replace: bool = False) -> Dict[str, Any]:
+        """Scan `/mnt/c/ai_models` and update `registry.json`.
 
-        # Discover base models
-        self._discover_base_models()
+        Args:
+            replace: When True, rebuild the registry from disk (keeps presets).
+        """
+        before = len(self.models)
 
-        # Discover LoRA models
-        self._discover_lora_models()
+        existing_usage = {
+            name: (entry.created_at, entry.last_used)
+            for name, entry in self.models.items()
+        }
 
-        # Discover embeddings
-        self._discover_embeddings()
+        if replace:
+            self.models = {}
 
-        # Save updated registry
+        added = 0
+        added += self._discover_base_models()
+        added += self._discover_controlnet_models()
+        added += self._discover_lora_models()
+        added += self._discover_embeddings()
+
+        # Preserve usage timestamps for unchanged model ids.
+        for name, entry in self.models.items():
+            created_at, last_used = existing_usage.get(name, (None, None))
+            if created_at and not entry.created_at:
+                entry.created_at = created_at
+            if last_used and not entry.last_used:
+                entry.last_used = last_used
+
         self._save_registries()
 
-    def _discover_base_models(self):
-        """Discover StableDiffusion base models"""
-        hf_models_dir = self.cache_paths.hf_home / "hub"
+        return {
+            "status": "ok",
+            "replace": bool(replace),
+            "models_before": before,
+            "models_after": len(self.models),
+            "models_added": added,
+            "registry_path": str(self.registry_path),
+            "updated_at": datetime.now().isoformat(),
+        }
 
-        if not hf_models_dir.exists():
-            return
+    # Backwards compatible alias.
+    def auto_discover_models(self) -> None:
+        self.scan_filesystem(replace=False)
 
-        for model_dir in hf_models_dir.iterdir():
-            if not model_dir.is_dir():
-                continue
+    def _upsert_model(self, entry: ModelEntry) -> bool:
+        existing = self.models.get(entry.name)
+        if existing:
+            # Preserve human-meaningful timestamps from the registry.
+            entry.created_at = existing.created_at or entry.created_at
+            entry.last_used = existing.last_used or entry.last_used
+            entry.metadata = existing.metadata or entry.metadata
+        self.models[entry.name] = entry
+        return existing is None
 
-            # Check if it's a diffusion model
-            unet_config = model_dir / "unet" / "config.json"
-            model_index = model_dir / "model_index.json"
+    def _discover_base_models(self) -> int:
+        """Discover local Stable Diffusion base models under `/mnt/c/ai_models`."""
+        discovered = 0
 
-            if unet_config.exists() or model_index.exists():
-                model_name = model_dir.name.replace("models--", "").replace("--", "/")
-
-                if model_name not in self.models:
-                    # Determine model type
-                    model_type = "sdxl" if "xl" in model_name.lower() else "sd15"
-
-                    # Calculate size
-                    size_mb = self._calculate_dir_size(model_dir)
-
-                    entry = ModelEntry(
-                        name=model_name,
-                        path=str(model_dir),
-                        model_type=model_type,
-                        size_mb=size_mb,
-                        description=f"Auto-discovered {model_type.upper()} model",
-                        tags=["base_model", model_type],
-                        created_at=datetime.now().isoformat(),
-                    )
-
-                    self.models[model_name] = entry
-                    logger.debug(f"Discovered model: {model_name}")
-
-    def _discover_lora_models(self):
-        """Discover LoRA models"""
-        lora_dirs = [
-            self.cache_paths.models / "lora",
-            self.cache_paths.runs,  # Training outputs
+        roots = [
+            ("sd15", self.cache_paths.models / "stable-diffusion" / "sd15"),
+            ("sdxl", self.cache_paths.models / "stable-diffusion" / "sdxl"),
         ]
 
-        for lora_dir in lora_dirs:
-            if not lora_dir.exists():
+        for model_type, root in roots:
+            if not root.exists():
                 continue
 
-            for lora_path in lora_dir.rglob("*.safetensors"):
-                if "lora" in lora_path.name.lower() or lora_path.parent.name == "lora":
-                    model_name = f"lora/{lora_path.stem}"
+            for model_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+                if not (
+                    (model_dir / "model_index.json").exists()
+                    or (model_dir / "unet" / "config.json").exists()
+                ):
+                    continue
 
-                    if model_name not in self.models:
-                        size_mb = lora_path.stat().st_size / (1024 * 1024)
-
-                        entry = ModelEntry(
-                            name=model_name,
-                            path=str(lora_path),
-                            model_type="lora",
-                            size_mb=size_mb,
-                            description="Auto-discovered LoRA model",
-                            tags=["lora"],
-                            created_at=datetime.now().isoformat(),
-                        )
-
-                        self.models[model_name] = entry
-                        logger.debug(f"Discovered LoRA: {model_name}")
-
-    def _discover_embeddings(self):
-        """Discover textual inversion embeddings"""
-        embeddings_dir = self.cache_paths.models / "embeddings"
-
-        if not embeddings_dir.exists():
-            return
-
-        for embed_path in embeddings_dir.rglob("*.pt"):
-            model_name = f"embedding/{embed_path.stem}"
-
-            if model_name not in self.models:
-                size_mb = embed_path.stat().st_size / (1024 * 1024)
+                model_name = f"{model_type}/{model_dir.name}"
+                size_mb = self._calculate_dir_size(model_dir)
 
                 entry = ModelEntry(
                     name=model_name,
-                    path=str(embed_path),
-                    model_type="embedding",
+                    path=str(model_dir),
+                    model_type=model_type,
                     size_mb=size_mb,
-                    description="Auto-discovered embedding",
-                    tags=["embedding"],
+                    description=f"Local {model_type.upper()} model",
+                    tags=["base_model", model_type, "local"],
                     created_at=datetime.now().isoformat(),
                 )
 
-                self.models[model_name] = entry
+                if self._upsert_model(entry):
+                    discovered += 1
+
+        return discovered
+
+    def _discover_lora_models(self) -> int:
+        """Discover LoRA models under `/mnt/c/ai_models/lora*`."""
+        discovered = 0
+
+        roots = [
+            (self.cache_paths.models / "lora", "lora/", []),
+            (self.cache_paths.models / "lora_sdxl", "lora_sdxl/", ["sdxl"]),
+        ]
+
+        for root, prefix, extra_tags in roots:
+            if not root.exists():
+                continue
+
+            for lora_path in sorted(root.rglob("*.safetensors")):
+                model_name = f"{prefix}{lora_path.stem}"
+                size_mb = lora_path.stat().st_size / (1024 * 1024)
+
+                entry = ModelEntry(
+                    name=model_name,
+                    path=str(lora_path),
+                    model_type="lora",
+                    size_mb=size_mb,
+                    description="Local LoRA model",
+                    tags=["lora", "local", *extra_tags],
+                    created_at=datetime.now().isoformat(),
+                )
+
+                if self._upsert_model(entry):
+                    discovered += 1
+
+        return discovered
+
+    def _discover_controlnet_models(self) -> int:
+        """Discover ControlNet models under `/mnt/c/ai_models/controlnet`."""
+        discovered = 0
+        root = self.cache_paths.models / "controlnet"
+        if not root.exists():
+            return 0
+
+        # Diffusers-style folders
+        for model_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            if not (
+                (model_dir / "config.json").exists()
+                or (model_dir / "model_index.json").exists()
+            ):
+                continue
+            model_name = f"controlnet/{model_dir.name}"
+            size_mb = self._calculate_dir_size(model_dir)
+            entry = ModelEntry(
+                name=model_name,
+                path=str(model_dir),
+                model_type="controlnet",
+                size_mb=size_mb,
+                description="Local ControlNet model",
+                tags=["controlnet", "local"],
+                created_at=datetime.now().isoformat(),
+            )
+            if self._upsert_model(entry):
+                discovered += 1
+
+        # Single files (best-effort)
+        for model_path in sorted(root.rglob("*.safetensors")):
+            model_name = f"controlnet/{model_path.stem}"
+            size_mb = model_path.stat().st_size / (1024 * 1024)
+            entry = ModelEntry(
+                name=model_name,
+                path=str(model_path),
+                model_type="controlnet",
+                size_mb=size_mb,
+                description="Local ControlNet weights",
+                tags=["controlnet", "local"],
+                created_at=datetime.now().isoformat(),
+            )
+            if self._upsert_model(entry):
+                discovered += 1
+
+        return discovered
+
+    def _discover_embeddings(self) -> int:
+        """Discover textual inversion embeddings under `/mnt/c/ai_models/embeddings`."""
+        embeddings_dir = self.cache_paths.models / "embeddings"
+
+        if not embeddings_dir.exists():
+            return 0
+
+        discovered = 0
+        for embed_path in embeddings_dir.rglob("*.pt"):
+            model_name = f"embedding/{embed_path.stem}"
+            size_mb = embed_path.stat().st_size / (1024 * 1024)
+            entry = ModelEntry(
+                name=model_name,
+                path=str(embed_path),
+                model_type="embedding",
+                size_mb=size_mb,
+                description="Local embedding",
+                tags=["embedding", "local"],
+                created_at=datetime.now().isoformat(),
+            )
+            if self._upsert_model(entry):
+                discovered += 1
+
+        return discovered
 
     def _calculate_dir_size(self, directory: Path) -> float:
         """Calculate directory size in MB"""

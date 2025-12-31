@@ -4,25 +4,22 @@
 確保所有模組使用一致的快取目錄結構和環境設定
 """
 
-import os
 import json
-import hashlib
-import time
 import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, List, Union
-from datetime import datetime, timedelta
-from dataclasses import dataclass
 import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
 import psutil
 
 # Import unified config system
 from core.config import (
-    get_settings,
-    get_cache_paths,
     get_app_paths,
-    CachePaths,
-    AppPaths,
+    get_cache_paths,
+    get_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -498,7 +495,7 @@ def bootstrap_cache(verbose: bool = False) -> SharedCache:
 
     if verbose:
         summary = cache.get_summary()
-        print(f"✅ Shared cache initialized")
+        print("✅ Shared cache initialized")
         print(f"   Cache root: {summary['cache_root']}")
         print(f"   Registered models: {summary['registered_models']}")
         print(f"   Device: {summary['device_config'].get('device_name', 'CPU')}")

@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/start_worker.sh - CharaForge T2I Lab Celery Worker Startup Script
 
-set -e
+set -euo pipefail
 
 # 顏色定義
 RED='\033[0;31m'
@@ -35,6 +35,24 @@ if [ -f .env ]; then
     set +o allexport
 fi
 
+# AI_WAREHOUSE 3.0 defaults (see ~/Desktop/data_model_structure.md)
+export PROJECT_SLUG="${PROJECT_SLUG:-charaforge-t2i-lab}"
+export AI_MODELS_ROOT="${AI_MODELS_ROOT:-/mnt/c/ai_models}"
+export AI_CACHE_ROOT="${AI_CACHE_ROOT:-/mnt/c/ai_cache}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/mnt/c/ai_cache}"
+export HF_HOME="${HF_HOME:-/mnt/c/ai_cache/huggingface}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/mnt/c/ai_cache/huggingface}"
+export TORCH_HOME="${TORCH_HOME:-/mnt/c/ai_cache/torch}"
+export AI_DATASETS_ROOT="${AI_DATASETS_ROOT:-/mnt/data/datasets}"
+export AI_TRAINING_ROOT="${AI_TRAINING_ROOT:-/mnt/data/training}"
+
+echo -e "${BLUE}📁 Ensuring required directories...${NC}"
+mkdir -p "$AI_CACHE_ROOT"/{pip,torch,huggingface}
+mkdir -p "$AI_MODELS_ROOT"/{stable-diffusion,controlnet,lora,lora_sdxl,embeddings}
+mkdir -p "$AI_DATASETS_ROOT/$PROJECT_SLUG"/{raw,processed}
+mkdir -p "$AI_TRAINING_ROOT"/{runs,logs}
+mkdir -p "$AI_TRAINING_ROOT/runs/$PROJECT_SLUG"/{outputs}
+
 # 檢查 Redis 連線
 echo -e "${BLUE}🔍 Checking Redis connection...${NC}"
 if command -v redis-cli >/dev/null 2>&1; then
@@ -50,7 +68,7 @@ fi
 echo -e "${BLUE}🔍 Checking Celery dependencies...${NC}"
 python -c "
 import sys
-required_packages = ['celery', 'redis']
+required_packages = ['celery', 'redis', 'peft', 'torch', 'diffusers', 'transformers', 'accelerate']
 missing_packages = []
 
 for package in required_packages:
@@ -61,7 +79,7 @@ for package in required_packages:
 
 if missing_packages:
     print(f'❌ Missing packages: {missing_packages}')
-    print('   Install with: pip install celery redis')
+    print('   Install with: pip install -r requirements.txt')
     sys.exit(1)
 else:
     print('✅ Celery packages available')
@@ -69,13 +87,6 @@ else:
 
 if [ $? -ne 0 ]; then
     exit 1
-fi
-
-# 檢查共用快取目錄
-CACHE_ROOT="${AI_CACHE_ROOT:-../ai_warehouse/cache}"
-if [ ! -d "$CACHE_ROOT" ]; then
-    echo -e "${YELLOW}📁 Creating shared cache directory: $CACHE_ROOT${NC}"
-    mkdir -p "$CACHE_ROOT"
 fi
 
 # Worker 設定
@@ -89,7 +100,9 @@ echo -e "   Worker Name: ${WORKER_NAME}"
 echo -e "   Concurrency: ${CONCURRENCY}"
 echo -e "   Log Level: ${LOG_LEVEL}"
 echo -e "   Max Tasks per Child: ${MAX_TASKS_PER_CHILD}"
-echo -e "   Cache Root: ${CACHE_ROOT}"
+echo -e "   Cache Root: ${AI_CACHE_ROOT}"
+echo -e "   Models Root: ${AI_MODELS_ROOT}"
+echo -e "   Training Root: ${AI_TRAINING_ROOT}"
 
 # 檢查 GPU 可用性
 echo -e "${BLUE}🖥️  Checking GPU availability for worker...${NC}"

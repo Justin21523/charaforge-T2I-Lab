@@ -2,7 +2,6 @@
 """Helper script to create conda environment"""
 import subprocess
 import sys
-import os
 
 
 def create_conda_env():

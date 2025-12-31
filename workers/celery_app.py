@@ -1,14 +1,17 @@
 # workers/celery_app.py - Celery Application Configuration
 """
-SagaForge T2I Lab Celery 配置
-處理訓練任務、批次生成、模型管理等後台作業
+CharaForge T2I Lab Celery configuration.
+
+Note: the API can run without Celery/Redis, but training tasks require them.
 """
 
+import json
 import os
 import sys
-from pathlib import Path
-from celery import Celery
 from datetime import datetime
+from pathlib import Path
+
+from celery import Celery
 from kombu import Queue
 
 # 確保可以導入專案模組
@@ -18,7 +21,7 @@ if str(ROOT_DIR) not in sys.path:
 
 # 導入配置
 try:
-    from core.config import get_settings, bootstrap_config
+    from core.config import bootstrap_config, get_settings
 
     CORE_AVAILABLE = True
 except ImportError:
@@ -68,16 +71,12 @@ celery_app.conf.update(
     # Task routing
     task_routes={
         "workers.tasks.training.*": {"queue": "training"},
-        "workers.tasks.generation.*": {"queue": "generation"},
-        "workers.tasks.batch.*": {"queue": "batch"},
     },
     # Queues
     task_default_queue="default",
     task_queues=(
         Queue("default", routing_key="default"),
         Queue("training", routing_key="training"),
-        Queue("generation", routing_key="generation"),
-        Queue("batch", routing_key="batch"),
     ),
     # Worker settings
     worker_prefetch_multiplier=1,
@@ -94,21 +93,16 @@ celery_app.conf.update(
     task_send_sent_event=True,
 )
 
-# ===== Task Discovery =====
+# ===== Task Registration =====
+#
+# Keep imports explicit so the worker can start even if optional task modules are
+# broken/unavailable.
+try:
+    import workers.tasks.training  # noqa: F401
 
-# Import tasks to register them
-task_modules = [
-    "workers.tasks.training",
-    "workers.tasks.generation",
-    "workers.tasks.batch",
-]
-
-for module in task_modules:
-    try:
-        celery_app.autodiscover_tasks([module])
-        print(f"✅ Loaded tasks from {module}")
-    except ImportError as e:
-        print(f"⚠️ Failed to load tasks from {module}: {e}")
+    print("✅ Loaded tasks: workers.tasks.training")
+except Exception as e:
+    print(f"⚠️ Failed to load training tasks: {e}")
 
 # ===== Celery Events and Signals =====
 
@@ -116,8 +110,9 @@ for module in task_modules:
 @celery_app.task(bind=True, name="workers.health_check")
 def health_check(self):
     """Worker 健康檢查任務"""
-    import torch
     from datetime import datetime
+
+    import torch
 
     return {
         "worker_id": self.request.id,
@@ -175,9 +170,9 @@ def setup_worker(sender=None, **kwargs):
     if CORE_AVAILABLE:
         try:
             # Bootstrap configuration and cache
-            settings, cache_paths, app_paths = bootstrap_config(verbose=True)
-            print(f"✅ Worker configuration initialized")
-            print(f"   Cache root: {cache_paths.root}")
+            bootstrap_config(verbose=True)
+            settings = get_settings()
+            print("✅ Worker configuration initialized")
             print(f"   Environment: {settings.environment}")
 
         except Exception as e:
@@ -223,6 +218,59 @@ class TaskProgress:
         self.total_steps = total_steps
         self.current_step = 0
 
+    def _publish_ws(self, state: str, payload: dict) -> None:
+        """Publish progress events to Redis PubSub for WebSocket consumers."""
+        try:
+            import redis  # type: ignore
+        except Exception:
+            return
+
+        job_id = getattr(getattr(self.task, "request", None), "id", None)
+        if not job_id:
+            return
+
+        url = (
+            os.getenv("REDIS_URL")
+            or os.getenv("CELERY_BROKER_URL")
+            or config.get("broker_url")
+            or config.get("result_backend")
+        )
+        if not url or not str(url).startswith("redis"):
+            return
+
+        channel = f"charaforge:train:{job_id}"
+        topic = (
+            "training.progress"
+            if state == "PROGRESS"
+            else "training.complete"
+            if state == "SUCCESS"
+            else "training.failure"
+        )
+
+        try:
+            client = redis.Redis.from_url(
+                url,
+                socket_timeout=1,
+                socket_connect_timeout=1,
+                retry_on_timeout=False,
+                decode_responses=True,
+            )
+            client.publish(
+                channel,
+                json.dumps(
+                    {
+                        "topic": topic,
+                        "job_id": job_id,
+                        "state": state,
+                        "progress": payload,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception:
+            return
+
     def update(self, step: int, message: str = "", **extra_data):
         """更新任務進度"""
         self.current_step = step
@@ -237,6 +285,7 @@ class TaskProgress:
         }
 
         self.task.update_state(state="PROGRESS", meta=state_data)
+        self._publish_ws("PROGRESS", state_data)
 
         return state_data
 
@@ -251,6 +300,7 @@ class TaskProgress:
         }
 
         self.task.update_state(state="SUCCESS", meta=final_data)
+        self._publish_ws("SUCCESS", final_data)
 
         return final_data
 
@@ -266,6 +316,7 @@ class TaskProgress:
         }
 
         self.task.update_state(state="FAILURE", meta=error_data)
+        self._publish_ws("FAILURE", error_data)
 
         return error_data
 
@@ -282,7 +333,7 @@ def start_worker():
         "worker",
         "--loglevel=info",
         f"--concurrency={config['worker_concurrency']}",
-        "--queues=default,training,generation,batch",
+        "--queues=default,training",
         "--pool=solo" if os.name == "nt" else "--pool=prefork",  # Windows compatibility
     ]
 

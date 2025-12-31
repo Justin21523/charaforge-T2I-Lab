@@ -1,165 +1,113 @@
-# backend/api/health.py
-"""Health check endpoints"""
-import torch
-import psutil
-from fastapi import APIRouter
-from pydantic import BaseModel
-from typing import Dict, Any
-import torch
+"""Health check endpoints."""
+
+from __future__ import annotations
+
 from datetime import datetime
-import redis
+from typing import Any, Dict
 
-from core.config import get_settings, get_cache_paths
-from workers.utils.queue_monitor import QueueMonitor
+import psutil
 
-router = APIRouter()
-settings = get_settings()
+try:
+    import redis  # type: ignore
+except ImportError:  # pragma: no cover
+    redis = None  # type: ignore
+import torch
+from fastapi import APIRouter
+
+from core.config import get_cache_paths, get_settings
+
+router = APIRouter(tags=["health"])
 
 
-class HealthResponse(BaseModel):
-    status: str
-    gpu_available: bool
-    gpu_count: int
-    memory_usage: Dict[str, Any]
-    cache_root: str
+def _gpu_info() -> Dict[str, Any]:
+    if not torch.cuda.is_available():
+        return {"available": False}
+
+    try:
+        props = torch.cuda.get_device_properties(0)
+        return {
+            "available": True,
+            "device_count": torch.cuda.device_count(),
+            "device_name": props.name,
+            "memory_total": props.total_memory,
+            "memory_allocated": torch.cuda.memory_allocated(0),
+            "memory_reserved": torch.cuda.memory_reserved(0),
+        }
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
 
 
+def _redis_info(redis_url: str) -> Dict[str, Any]:
+    if redis is None:
+        return {"status": "unavailable", "error": "redis package not installed"}
+    try:
+        client = redis.from_url(redis_url, socket_connect_timeout=0.2, socket_timeout=0.2)
+        client.ping()
+        info = client.info()
+        return {
+            "status": "connected",
+            "version": info.get("redis_version"),
+            "used_memory": info.get("used_memory_human"),
+            "connected_clients": info.get("connected_clients"),
+        }
+    except Exception as exc:
+        return {"status": "unavailable", "error": str(exc)}
+
+
+@router.get("/health")
 @router.get("/healthz")
-async def health_check() -> Dict[str, Any]:
-    """Comprehensive health check endpoint"""
+async def health() -> Dict[str, Any]:
+    """Basic health endpoint used by the React UI."""
+    settings = get_settings()
+    cache_paths = get_cache_paths()
 
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "0.1.0",
-        "components": {},
+    system = {}
+    try:
+        system = {
+            "cpu_percent": psutil.cpu_percent(interval=0.2),
+            "memory_percent": psutil.virtual_memory().percent,
+        }
+    except Exception as exc:
+        system = {"error": str(exc)}
+
+    components: Dict[str, Any] = {
+        "gpu": _gpu_info(),
+        "redis": _redis_info(settings.redis_url),
+        "cache": {
+            "cache_root": str(cache_paths.root),
+            "models_root": str(cache_paths.models),
+            "datasets_root": str(cache_paths.datasets),
+            "outputs_root": str(cache_paths.outputs),
+        },
+        "system": system,
     }
 
-    # Check GPU
-    try:
-        if torch.cuda.is_available():
-            gpu_info = {
-                "available": True,
-                "device_count": torch.cuda.device_count(),
-                "current_device": torch.cuda.current_device(),
-                "device_name": torch.cuda.get_device_name(0),
-                "memory_allocated": torch.cuda.memory_allocated(0),
-                "memory_reserved": torch.cuda.memory_reserved(0),
-                "memory_total": torch.cuda.get_device_properties(0).total_memory,
-            }
-        else:
-            gpu_info = {"available": False, "reason": "CUDA not available"}
+    status = "ok"
+    if components["redis"].get("status") != "connected":
+        status = "degraded"
 
-        health_status["components"]["gpu"] = gpu_info
-
-    except Exception as e:
-        health_status["components"]["gpu"] = {"available": False, "error": str(e)}
-
-    # Check Redis
-    try:
-        redis_client = redis.from_url(settings.redis_url)
-        redis_client.ping()
-        redis_info = redis_client.info()
-
-        health_status["components"]["redis"] = {
-            "status": "connected",
-            "version": redis_info.get("redis_version"),  # type: ignore
-            "used_memory": redis_info.get("used_memory_human"),  # type: ignore
-            "connected_clients": redis_info.get("connected_clients"),  # type: ignore
-        }
-
-    except Exception as e:
-        health_status["components"]["redis"] = {"status": "error", "error": str(e)}
-        health_status["status"] = "degraded"
-
-    # Check system resources
-    try:
-        health_status["components"]["system"] = {
-            "cpu_percent": psutil.cpu_percent(interval=1),
-            "memory_percent": psutil.virtual_memory().percent,
-            "disk_usage": psutil.disk_usage("/").percent,
-            "load_average": (
-                psutil.getloadavg() if hasattr(psutil, "getloadavg") else None
-            ),
-        }
-    except Exception as e:
-        health_status["components"]["system"] = {"error": str(e)}
-
-    # Check cache directories
-    try:
-        cache_paths = get_cache_paths()
-        cache_status = {
-            "root_exists": cache_paths.root.exists(),
-            "models_dir": cache_paths.models.exists(),
-            "datasets_dir": cache_paths.datasets.exists(),
-            "outputs_dir": cache_paths.outputs.exists(),
-        }
-        health_status["components"]["cache"] = cache_status
-
-    except Exception as e:
-        health_status["components"]["cache"] = {"error": str(e)}
-
-    # Check worker queues
-    try:
-        monitor = QueueMonitor()
-        queue_stats = monitor.get_queue_stats()
-        health_status["components"]["workers"] = queue_stats
-
-        if queue_stats.get("workers_online", 0) == 0:
-            health_status["status"] = "degraded"
-
-    except Exception as e:
-        health_status["components"]["workers"] = {"error": str(e)}
-        health_status["status"] = "degraded"
-
-    # Overall status determination
-    failed_components = [
-        name
-        for name, component in health_status["components"].items()
-        if "error" in component or component.get("status") == "error"
-    ]
-
-    if failed_components:
-        if len(failed_components) >= len(health_status["components"]) // 2:
-            health_status["status"] = "unhealthy"
-        else:
-            health_status["status"] = "degraded"
-
-        health_status["failed_components"] = failed_components
-
-    return health_status
+    return {
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+        "version": "0.2.0",
+        "environment": settings.environment,
+        "cache_root": str(cache_paths.root),
+        "gpu_available": bool(components["gpu"].get("available")),
+        "gpu_count": components["gpu"].get("device_count", 0),
+        "components": components,
+    }
 
 
 @router.get("/readiness")
-async def readiness_check() -> Dict[str, Any]:
-    """Kubernetes readiness probe"""
-    try:
-        # Quick checks for essential services
-        cache_paths = get_cache_paths()
-
-        # Check if cache root exists
-        if not cache_paths.root.exists():
-            return {"ready": False, "reason": "Cache root not initialized"}
-
-        # Check Redis connection
-        redis_client = redis.from_url(settings.redis_url)
-        redis_client.ping()
-
-        return {"ready": True, "timestamp": datetime.now().isoformat()}
-
-    except Exception as e:
-        return {
-            "ready": False,
-            "reason": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
+async def readiness() -> Dict[str, Any]:
+    settings = get_settings()
+    cache_paths = get_cache_paths()
+    ready = cache_paths.root.exists()
+    redis_state = _redis_info(settings.redis_url)
+    ready = ready and redis_state.get("status") == "connected"
+    return {"ready": bool(ready), "timestamp": datetime.now().isoformat()}
 
 
 @router.get("/liveness")
-async def liveness_check() -> Dict[str, Any]:
-    """Kubernetes liveness probe"""
-    return {
-        "alive": True,
-        "timestamp": datetime.now().isoformat(),
-        "uptime": "running",  # Could calculate actual uptime
-    }
+async def liveness() -> Dict[str, Any]:
+    return {"alive": True, "timestamp": datetime.now().isoformat()}

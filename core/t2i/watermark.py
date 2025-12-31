@@ -4,21 +4,17 @@
 支援文字浮水印、Logo 浮水印和隱寫術浮水印
 """
 
-import logging
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ExifTags
-from PIL.PngImagePlugin import PngInfo
-from PIL.ExifTags import TAGS
-from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple, Union
-import hashlib
-import torch
-from pathlib import Path
-import base64
 import io
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from core.config import get_settings, get_app_paths
-from core.exceptions import CharaForgeError
+import numpy as np
+from PIL import ExifTags, Image, ImageDraw, ImageEnhance, ImageFont
+from PIL.PngImagePlugin import PngInfo
+
+from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +133,7 @@ class TextWatermark:
                 for font_file in common_fonts:
                     try:
                         return ImageFont.truetype(font_file, font_size)  # type: ignore
-                    except:
+                    except Exception:
                         continue
 
                 # Fallback to default font
@@ -301,7 +297,7 @@ class WatermarkProcessor:
             # 嘗試載入字體
             try:
                 font = ImageFont.truetype("arial.ttf", font_size)
-            except:
+            except Exception:
                 font = ImageFont.load_default()
 
             # 計算文字尺寸
@@ -676,7 +672,7 @@ class MetadataWatermark:
 
                         tag_name = TAGS.get(tag_id, tag_id)
                         metadata[f"EXIF_{tag_name}"] = value
-                    except:
+                    except Exception:
                         continue
 
             logger.debug(f"Metadata extracted: {len(metadata)} items")
@@ -789,9 +785,7 @@ class WatermarkManager:
 
             # Apply metadata watermark
             if config["metadata"]["enabled"]:
-                metadata_to_add = self._generate_metadata(
-                    generation_metadata, config["metadata"]
-                )
+                _ = self._generate_metadata(generation_metadata, config["metadata"])
                 # Note: This would require saving and reloading the image
                 # For now, we'll skip this step in the pipeline
                 # result_image = self.metadata.add_metadata(result_image, metadata_to_add)

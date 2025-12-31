@@ -1,25 +1,39 @@
 #!/bin/bash
 # scripts/start_api.sh - API 啟動腳本
 
-set -e
+set -euo pipefail
 
 echo "=== CharaForge T2I Lab - API 啟動腳本 ==="
 
-# 檢查環境變數
-if [ -z "$AI_CACHE_ROOT" ]; then
-    echo "警告: AI_CACHE_ROOT 未設定，使用預設值"
-    export AI_CACHE_ROOT="../ai_warehouse/cache"
+# 載入環境變數（如果存在）
+if [ -f .env ]; then
+    echo "📋 Loading environment variables from .env"
+    set -o allexport
+    source .env
+    set +o allexport
 fi
 
-# 檢查並創建必要目錄
-echo "檢查快取目錄..."
-mkdir -p "$AI_CACHE_ROOT"/{models,datasets,cache,runs,outputs}
-mkdir -p "$AI_CACHE_ROOT"/models/{sd,sdxl,controlnet,lora,ipadapter}
-mkdir -p "$AI_CACHE_ROOT"/cache/{hf,torch}
+# AI_WAREHOUSE 3.0 defaults (see ~/Desktop/data_model_structure.md)
+export PROJECT_SLUG="${PROJECT_SLUG:-charaforge-t2i-lab}"
+export AI_MODELS_ROOT="${AI_MODELS_ROOT:-/mnt/c/ai_models}"
+export AI_CACHE_ROOT="${AI_CACHE_ROOT:-/mnt/c/ai_cache}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/mnt/c/ai_cache}"
+export HF_HOME="${HF_HOME:-/mnt/c/ai_cache/huggingface}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/mnt/c/ai_cache/huggingface}"
+export TORCH_HOME="${TORCH_HOME:-/mnt/c/ai_cache/torch}"
+export AI_DATASETS_ROOT="${AI_DATASETS_ROOT:-/mnt/data/datasets}"
+export AI_TRAINING_ROOT="${AI_TRAINING_ROOT:-/mnt/data/training}"
+
+echo "📁 Ensuring required directories..."
+mkdir -p "$AI_CACHE_ROOT"/{pip,torch,huggingface}
+mkdir -p "$AI_MODELS_ROOT"/{stable-diffusion,controlnet,lora,lora_sdxl,embeddings}
+mkdir -p "$AI_DATASETS_ROOT/$PROJECT_SLUG"/{raw,processed}
+mkdir -p "$AI_TRAINING_ROOT"/{runs,logs}
+mkdir -p "$AI_TRAINING_ROOT/runs/$PROJECT_SLUG"/{outputs}
 
 # 檢查 Python 環境
 echo "檢查 Python 環境..."
-if ! python -c "import torch, diffusers, transformers, fastapi" 2>/dev/null; then
+if ! python -c "import torch, diffusers, transformers, fastapi, peft, celery, redis" 2>/dev/null; then
     echo "錯誤: 缺少必要的 Python 套件"
     echo "請運行: pip install -r requirements.txt"
     exit 1
@@ -55,70 +69,7 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 # 啟動 API
 echo "啟動 FastAPI 服務器..."
 echo "API 文檔: http://localhost:8000/docs"
-echo "健康檢查: http://localhost:8000/healthz"
+echo "健康檢查: http://localhost:8000/api/v1/health"
 echo ""
 
-exec uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-
----
-#!/bin/bash
-# scripts/start_worker.sh - Worker 啟動腳本
-
-set -e
-
-echo "=== CharaForge T2I Lab - Worker 啟動腳本 ==="
-
-# 檢查環境變數
-if [ -z "$AI_CACHE_ROOT" ]; then
-    echo "警告: AI_CACHE_ROOT 未設定，使用預設值"
-    export AI_CACHE_ROOT="../ai_warehouse/cache"
-fi
-
-# 檢查 Redis 連接
-echo "檢查 Redis 連接..."
-if ! redis-cli ping >/dev/null 2>&1; then
-    echo "錯誤: Redis 連接失敗"
-    echo "請先啟動 Redis: redis-server"
-    exit 1
-fi
-
-# 設置環境變數
-export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-
-# 選擇 worker 類型
-WORKER_TYPE="${1:-all}"
-
-case "$WORKER_TYPE" in
-    "training")
-        echo "啟動訓練 Worker (單並發)..."
-        exec celery -A workers.celery_app worker \
-            --loglevel=info \
-            --queues=training \
-            --concurrency=1 \
-            --max-tasks-per-child=1
-        ;;
-    "generation")
-        echo "啟動生成 Worker (多並發)..."
-        exec celery -A workers.celery_app worker \
-            --loglevel=info \
-            --queues=generation \
-            --concurrency=2 \
-            --max-tasks-per-child=5
-        ;;
-    "batch")
-        echo "啟動批次 Worker..."
-        exec celery -A workers.celery_app worker \
-            --loglevel=info \
-            --queues=batch \
-            --concurrency=1 \
-            --max-tasks-per-child=3
-        ;;
-    "all"|*)
-        echo "啟動通用 Worker (所有隊列)..."
-        exec celery -A workers.celery_app worker \
-            --loglevel=info \
-            --concurrency=2 \
-            --max-tasks-per-child=3
-        ;;
-esac
+exec uvicorn api.main:app --host "${API_HOST:-0.0.0.0}" --port "${API_PORT:-8000}" --reload

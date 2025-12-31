@@ -1,13 +1,16 @@
 # core/train/dataset.py - Training dataset management
+import json
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from pathlib import Path
-import shutil
 from datetime import datetime
-import json, os
-import pandas as pd
-from PIL import Image
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import pandas as pd  # type: ignore
+except ImportError:  # pragma: no cover
+    pd = None  # type: ignore
 import torch
+from PIL import Image
 from torch.utils.data import Dataset
 
 from core.config import get_cache_paths
@@ -34,7 +37,7 @@ def validate_image_dataset(dataset_path: Path) -> Tuple[bool, List[str]]:
             return False, errors
 
         # 檢查圖片檔案
-        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+        image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
         image_files = []
 
         for ext in image_extensions:
@@ -94,7 +97,7 @@ def create_dataset_metadata(
             tags = []
 
         # 統計圖片數量
-        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+        image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
         image_count = 0
 
         for ext in image_extensions:
@@ -412,75 +415,108 @@ class DreamBoothDataset(Dataset):
 
 
 class T2IDataset(Dataset):
-    """
-    Minimal dataset: expects
-      captions.jsonl  (each line: {"file": "images/xxx.png", "text": "..."} )
-      images/<files>
+    """Simple image+caption dataset used for LoRA fine-tuning.
+
+    Supported creators:
+    - `from_folder(...)`: a directory of images with optional sidecar captions:
+        `image_001.png` + `image_001.txt`
+    - `from_csv(...)`: a CSV with image path + caption columns
     """
 
-    def __init__(
-        self,
-        dataset_name: Optional[str] = None,
-        dataset_path: Optional[str] = None,
-        resolution: int = 768,
-        caption_column: str = "caption",
-        image_column: str = "image_path",
-        max_samples: Optional[int] = None,
-    ):
-
-        self.dataset_name = dataset_name
+    def __init__(self, samples: List[Dict[str, Any]], resolution: int = 768):
+        self.samples = samples
         self.resolution = resolution
-        self.cache_paths = get_cache_paths()
 
-        # Load metadata
-        dataset_path = get_dataset_path(dataset_name)  # type: ignore
-        metadata_file = dataset_path / "metadata.parquet"  # type: ignore
+    @classmethod
+    def from_folder(
+        cls,
+        folder_path: str,
+        instance_prompt: str,
+        size: int = 768,
+        is_instance: bool = True,
+        max_samples: Optional[int] = None,
+    ) -> "T2IDataset":
+        folder = Path(folder_path)
+        if not folder.exists() or not folder.is_dir():
+            raise FileNotFoundError(f"Dataset folder not found: {folder}")
 
-        if not metadata_file.exists():
-            raise FileNotFoundError(f"Dataset metadata not found: {metadata_file}")
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+        image_files = sorted([p for p in folder.rglob("*") if p.suffix.lower() in image_exts])
+        if not image_files:
+            raise FileNotFoundError(f"No images found under: {folder}")
 
-        self.df = pd.read_parquet(metadata_file)
+        samples: List[Dict[str, Any]] = []
+        for img_path in image_files[: max_samples or len(image_files)]:
+            caption_path = img_path.with_suffix(".txt")
+            caption = instance_prompt
+            if caption_path.exists():
+                try:
+                    caption = caption_path.read_text(encoding="utf-8").strip() or instance_prompt
+                except Exception:
+                    caption = instance_prompt
 
-        # Limit samples if specified
-        if max_samples:
-            self.df = self.df.head(max_samples)
+            samples.append(
+                {
+                    "image_path": str(img_path),
+                    "caption": caption,
+                    "is_instance": bool(is_instance),
+                }
+            )
 
-        self.caption_column = caption_column
-        self.image_column = image_column
+        return cls(samples=samples, resolution=size)
 
-        print(f"[Dataset] Loaded {len(self.df)} samples from {dataset_name}")
+    @classmethod
+    def from_csv(
+        cls,
+        csv_path: str,
+        image_column: str = "image",
+        caption_column: str = "caption",
+        size: int = 768,
+        max_samples: Optional[int] = None,
+    ) -> "T2IDataset":
+        import csv
+
+        path = Path(csv_path)
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(f"CSV not found: {path}")
+
+        samples: List[Dict[str, Any]] = []
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                img_raw = (row.get(image_column) or "").strip()
+                if not img_raw:
+                    continue
+                img_path = Path(img_raw)
+                if not img_path.is_absolute():
+                    img_path = (path.parent / img_path).resolve()
+
+                caption = (row.get(caption_column) or "").strip()
+                samples.append({"image_path": str(img_path), "caption": caption, "is_instance": True})
+                if max_samples and len(samples) >= max_samples:
+                    break
+
+        if not samples:
+            raise ValueError("No valid rows found in CSV")
+
+        return cls(samples=samples, resolution=size)
 
     def __len__(self) -> int:
-        return len(self.df)
+        return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        row = self.df.iloc[idx]
+        sample = self.samples[idx]
 
-        # Load image
-        image_path = Path(row[self.image_column])
-        if not image_path.is_absolute():
-            dataset_path = get_dataset_path(self.dataset_name)  # type: ignore
-            image_path = dataset_path / image_path
+        image_path = Path(sample["image_path"])
+        caption = str(sample.get("caption", ""))
 
         try:
             image = Image.open(image_path).convert("RGB")
+            image = image.resize((self.resolution, self.resolution), Image.Resampling.LANCZOS)
+        except Exception:
+            image = Image.new("RGB", (self.resolution, self.resolution), color=(128, 128, 128))  # type: ignore
 
-            # Resize to target resolution
-            image = image.resize(
-                (self.resolution, self.resolution), Image.Resampling.LANCZOS
-            )
-
-        except Exception as e:
-            print(f"[Dataset] Error loading image {image_path}: {e}")
-            # Return placeholder
-            image = Image.new(
-                "RGB", (self.resolution, self.resolution), color=(128, 128, 128)  # type: ignore
-            )
-
-        # Get caption
-        caption = str(row.get(self.caption_column, ""))
-
-        return {"image": image, "caption": caption, "metadata": row.to_dict()}
+        return {"image": image, "caption": caption, "metadata": dict(sample)}
 
     @staticmethod
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -507,22 +543,17 @@ class DatasetRegistry:
             if not dataset_dir.is_dir():
                 continue
 
-            metadata_file = dataset_dir / "metadata.parquet"
-            if metadata_file.exists():
-                df = pd.read_parquet(metadata_file)
+            image_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+            image_count = len([p for p in dataset_dir.rglob("*") if p.suffix.lower() in image_exts])
 
-                dataset_info = {
-                    "name": dataset_dir.name,
-                    "path": str(dataset_dir),
-                    "samples": len(df),
-                    "splits": (
-                        df["split"].unique().tolist()
-                        if "split" in df.columns
-                        else ["train"]
-                    ),
-                    "has_captions": "caption" in df.columns,
-                    "has_tags": "tags" in df.columns,
-                }
-                datasets.append(dataset_info)
+            dataset_info = {
+                "name": dataset_dir.name,
+                "path": str(dataset_dir),
+                "samples": image_count,
+                "splits": ["train"],
+                "has_captions": bool(list(dataset_dir.rglob("*.txt"))),
+                "has_tags": False,
+            }
+            datasets.append(dataset_info)
 
         return datasets

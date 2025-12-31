@@ -4,33 +4,21 @@ SagaForge T2I System Smoke Test
 驗證所有 T2I 核心功能是否正常運作
 """
 
+import asyncio
+import json
+import logging
 import os
 import sys
-import asyncio
-import logging
-import time
-import requests
 from pathlib import Path
-from typing import Dict, Any, List
-import json
+from typing import Any, Dict
+
+import requests
+
+AI_CACHE_ROOT = os.getenv("AI_CACHE_ROOT", "/mnt/c/ai_cache")
 
 # Add project root to path
 ROOT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT_DIR))
-
-# Shared cache bootstrap
-AI_CACHE_ROOT = os.getenv("AI_CACHE_ROOT", "../ai_warehouse/cache")
-for k, v in {
-    "HF_HOME": f"{AI_CACHE_ROOT}/hf",
-    "TRANSFORMERS_CACHE": f"{AI_CACHE_ROOT}/hf/transformers",
-    "HF_DATASETS_CACHE": f"{AI_CACHE_ROOT}/hf/datasets",
-    "HUGGINGFACE_HUB_CACHE": f"{AI_CACHE_ROOT}/hf/hub",
-    "TORCH_HOME": f"{AI_CACHE_ROOT}/torch",
-}.items():
-    os.environ[k] = v
-    Path(v).mkdir(parents=True, exist_ok=True)
-
-print(f"[cache] {AI_CACHE_ROOT}")
 
 # Configure logging
 logging.basicConfig(
@@ -86,10 +74,10 @@ class T2ISmokeTest:
 
         try:
             from core.config import (
-                get_settings,
-                get_cache_paths,
-                get_app_paths,
                 bootstrap_config,
+                get_app_paths,
+                get_cache_paths,
+                get_settings,
             )
 
             # Test settings loading
@@ -121,7 +109,7 @@ class T2ISmokeTest:
         print("🗂️ Testing shared cache system...")
 
         try:
-            from core.shared_cache import get_shared_cache, bootstrap_cache
+            from core.shared_cache import bootstrap_cache
 
             # Test cache bootstrap
             cache = bootstrap_cache(verbose=False)
@@ -252,7 +240,8 @@ class T2ISmokeTest:
         print("🌐 Testing API health...")
 
         try:
-            response = requests.get(f"{self.api_base_url}/healthz", timeout=10)
+            base = self.api_base_url.rstrip("/")
+            response = requests.get(f"{base}/api/v1/health", timeout=10)
 
             if response.status_code == 200:
                 health_data = response.json()
@@ -285,12 +274,13 @@ class T2ISmokeTest:
                 "model_type": "sd15",
                 "width": 256,
                 "height": 256,
-                "num_inference_steps": 5,  # Very fast for testing
-                "num_images": 1,
+                "steps": 5,  # Very fast for testing
+                "batch_size": 1,
             }
 
+            base = self.api_base_url.rstrip("/")
             response = requests.post(
-                f"{self.api_base_url}/t2i/generate", json=generation_request, timeout=60
+                f"{base}/api/v1/t2i/generate", json=generation_request, timeout=60
             )
 
             if response.status_code == 200:
@@ -317,20 +307,22 @@ class T2ISmokeTest:
         print("🔄 Testing LoRA management API...")
 
         try:
-            # Test LoRA status (should work even without LoRAs loaded)
-            response = requests.get(f"{self.api_base_url}/t2i/models", timeout=10)
+            base = self.api_base_url.rstrip("/")
 
-            if response.status_code == 200:
-                models = response.json()
-                assert isinstance(models, dict), "Models response should be a dict"
-                assert "lora" in models, "Models should include LoRA category"
+            list_res = requests.get(f"{base}/api/v1/lora/list", timeout=10)
+            if list_res.status_code != 200:
+                raise RuntimeError(f"LoRA list failed: HTTP {list_res.status_code}")
+            assert isinstance(list_res.json(), list), "LoRA list should be a list"
 
-                self.test_results["lora_management"] = True
-                print("✅ LoRA management API test passed")
-            else:
-                error_msg = f"LoRA management API failed: HTTP {response.status_code}"
-                self.test_results["errors"].append(error_msg)
-                print(f"❌ {error_msg}")
+            status_res = requests.get(f"{base}/api/v1/lora/status", timeout=10)
+            if status_res.status_code != 200:
+                raise RuntimeError(f"LoRA status failed: HTTP {status_res.status_code}")
+            payload = status_res.json()
+            assert "pipeline_loaded" in payload, "LoRA status should include pipeline_loaded"
+            assert "loaded_loras" in payload, "LoRA status should include loaded_loras"
+
+            self.test_results["lora_management"] = True
+            print("✅ LoRA management API test passed")
 
         except Exception as e:
             error_msg = f"LoRA management API test failed: {e}"
@@ -339,34 +331,34 @@ class T2ISmokeTest:
 
     def test_system_status_api(self):
         """測試系統狀態 API"""
-        print("📊 Testing system status API...")
+        print("📊 Testing models API...")
 
         try:
-            response = requests.get(
-                f"{self.api_base_url}/t2i/system/status", timeout=10
-            )
+            base = self.api_base_url.rstrip("/")
+            response = requests.get(f"{base}/api/v1/models", timeout=10)
 
             if response.status_code == 200:
                 status = response.json()
-                assert "status" in status, "System status should include status field"
-                assert "device" in status, "System status should include device info"
+                assert "count" in status, "Models response should include count"
+                assert "models" in status, "Models response should include models list"
+                assert "registry_path" in status, "Models response should include registry_path"
 
                 self.test_results["system_status"] = True
-                print("✅ System status API test passed")
+                print("✅ Models API test passed")
             else:
-                error_msg = f"System status API failed: HTTP {response.status_code}"
+                error_msg = f"Models API failed: HTTP {response.status_code}"
                 self.test_results["errors"].append(error_msg)
                 print(f"❌ {error_msg}")
 
         except Exception as e:
-            error_msg = f"System status API test failed: {e}"
+            error_msg = f"Models API test failed: {e}"
             self.test_results["errors"].append(error_msg)
             print(f"❌ {error_msg}")
 
     def print_test_report(self):
         """打印測試報告"""
         print("\n" + "=" * 60)
-        print("🧪 SagaForge T2I Smoke Test Report")
+        print("🧪 CharaForge T2I Smoke Test Report")
         print("=" * 60)
 
         total_tests = len([k for k in self.test_results.keys() if k != "errors"])
@@ -393,7 +385,7 @@ class T2ISmokeTest:
                 print(f"  {i}. {error}")
 
         # Overall status
-        print(f"\n🎯 Overall Status: ", end="")
+        print("\n🎯 Overall Status: ", end="")
         if passed_tests == total_tests:
             print("🟢 ALL TESTS PASSED - System is ready!")
         elif passed_tests >= total_tests * 0.8:
@@ -424,6 +416,12 @@ def main():
     parser.add_argument("--save-report", help="Save test report to JSON file")
 
     args = parser.parse_args()
+
+    from core.config import bootstrap_config, get_config_summary
+
+    bootstrap_config(verbose=False)
+    summary = get_config_summary()
+    print(f"[storage] models={summary.get('models_root')} cache={summary.get('cache_root')}")
 
     # Run tests
     tester = T2ISmokeTest(api_base_url=args.api_url)
@@ -535,7 +533,7 @@ def test_installation():
         f"{AI_CACHE_ROOT}/outputs",
     ]
 
-    print(f"\n📁 Cache Directories:")
+    print("\n📁 Cache Directories:")
     for path in cache_paths:
         path_obj = Path(path)
         if path_obj.exists():
@@ -545,7 +543,7 @@ def test_installation():
             path_obj.mkdir(parents=True, exist_ok=True)
 
     # Summary
-    print(f"\n🎯 Installation Status:")
+    print("\n🎯 Installation Status:")
     if missing_packages:
         print(f"❌ Missing packages: {', '.join(missing_packages)}")
         print("📦 Install missing packages with:")
@@ -579,9 +577,9 @@ if __name__ == "__main__":
 def quick_api_test(api_url: str = "http://localhost:8000") -> bool:
     """快速 API 測試"""
     try:
-        response = requests.get(f"{api_url}/healthz", timeout=5)
+        response = requests.get(f"{api_url.rstrip('/')}/api/v1/health", timeout=5)
         return response.status_code == 200
-    except:
+    except Exception:
         return False
 
 
@@ -619,13 +617,14 @@ def test_gpu_memory():
 def benchmark_generation_speed():
     """基準測試生成速度"""
     try:
-        from core.t2i.pipeline import get_pipeline_manager
         import time
+
+        from core.t2i.pipeline import get_pipeline_manager
 
         print("⏱️ Running generation speed benchmark...")
 
         manager = get_pipeline_manager()
-        pipeline = manager.get_pipeline("sd15")
+        manager.get_pipeline("sd15")
 
         # Note: This would require loading actual models
         # For smoke test, we just test the pipeline creation

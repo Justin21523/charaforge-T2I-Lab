@@ -15,19 +15,19 @@ python scripts/download_script.py --category all
 python scripts/download_script.py --category llm --priority high
 """
 
-import os
-import sys
 import argparse
+import concurrent.futures
 import json
 import logging
+import os
+import subprocess
+import sys
 import time
-import concurrent.futures
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
-import subprocess
-import hashlib
+
 import requests
 
 # 確保可以導入專案模組
@@ -1031,17 +1031,17 @@ def main():
         print(f"總大小: {report['total_size_gb']:.1f} GB")
 
         if report["downloaded_models"]:
-            print(f"\n成功下載的模型:")
+            print("\n成功下載的模型:")
             for model in report["downloaded_models"]:
                 print(f"  ✓ {model}")
 
         if report["skipped_models"]:
-            print(f"\n跳過的模型:")
+            print("\n跳過的模型:")
             for model in report["skipped_models"]:
                 print(f"  ~ {model}")
 
         if report["failed_models"]:
-            print(f"\n失敗的模型:")
+            print("\n失敗的模型:")
             for model in report["failed_models"]:
                 print(f"  ✗ {model}")
 

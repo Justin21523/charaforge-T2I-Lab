@@ -4,10 +4,9 @@ Workers 啟動腳本
 支援不同模式的 Celery worker 啟動
 """
 
-import os
-import sys
-import subprocess
 import argparse
+import subprocess
+import sys
 from pathlib import Path
 
 # Add project root
@@ -113,7 +112,7 @@ def main():
     )
 
     # Test command
-    test_parser = subparsers.add_parser("test", help="Run worker tests")
+    subparsers.add_parser("test", help="Run test suite")
 
     args = parser.parse_args()
 
@@ -127,10 +126,7 @@ def main():
     elif args.command == "flower":
         start_flower(port=args.port)
     elif args.command == "test":
-        # Import and run tests
-        from .test_workers import main as run_tests
-
-        run_tests()
+        subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=ROOT_DIR, check=True)
     else:
         parser.print_help()
 

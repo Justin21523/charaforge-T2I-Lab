@@ -1,28 +1,54 @@
-"""Text-to-Image (T2I) API router.
+"""ControlNet generation endpoints.
 
-This router is intentionally thin: it adapts the React UI contract to the
-core `T2IPipelineManager` implementation.
+The React UI posts to:
+  POST /api/v1/controlnet/{type}
+
+Where `{type}` is one of: pose, depth, canny, lineart
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import secrets
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from core.config import get_app_paths, get_settings
 from core.t2i.pipeline import PIPELINE_LOCK, GenerationParams, get_pipeline_manager
 
-router = APIRouter(prefix="/t2i", tags=["t2i"])
+router = APIRouter(prefix="/controlnet", tags=["controlnet"])
+
+ALLOWED_CONTROL_TYPES = {"pose", "depth", "canny", "lineart"}
+
+DEFAULT_CONTROLNET_MODELS: Dict[str, Dict[str, str]] = {
+    "pose": {
+        "sd15": "lllyasviel/sd-controlnet-openpose",
+        "sdxl": "thibaud/controlnet-openpose-sdxl-1.0",
+    },
+    "depth": {
+        "sd15": "lllyasviel/sd-controlnet-depth",
+        "sdxl": "diffusers/controlnet-depth-sdxl-1.0",
+    },
+    "canny": {
+        "sd15": "lllyasviel/sd-controlnet-canny",
+        "sdxl": "diffusers/controlnet-canny-sdxl-1.0",
+    },
+    "lineart": {
+        "sd15": "lllyasviel/sd-controlnet-lineart",
+        "sdxl": "diffusers/controlnet-lineart-sdxl-1.0",
+    },
+}
 
 
-class GenerateRequest(BaseModel):
+class ControlNetGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=2000)
     negative: str = Field(default="", max_length=2000)
 
@@ -35,14 +61,25 @@ class GenerateRequest(BaseModel):
     sampler: str = Field(default="DPM++ 2M Karras", max_length=100)
     batch_size: int = Field(default=1, ge=1, le=8)
 
-    model_type: str = Field(default="sdxl")  # "sd15" | "sdxl"
+    model_type: str = Field(default="sdxl")
     model: Optional[str] = Field(default=None, max_length=2000)
 
     loras: List[Dict[str, Any]] = Field(default_factory=list)
     clip_skip: Optional[int] = Field(default=None, ge=1, le=12)
 
+    # ControlNet
+    control_image: str = Field(..., min_length=1, max_length=10_000_000)
+    weight: float = Field(default=1.0, ge=0.0, le=2.0)
+    controlnet_model: Optional[str] = Field(
+        default=None, description="Registry id, HF id, or absolute path"
+    )
+    preprocess: bool = Field(default=True)
 
-class GenerateResponse(BaseModel):
+    canny_low_threshold: int = Field(default=100, ge=0, le=255)
+    canny_high_threshold: int = Field(default=200, ge=0, le=255)
+
+
+class ControlNetGenerateResponse(BaseModel):
     status: str
     job_id: str
     image_path: List[str]
@@ -51,7 +88,7 @@ class GenerateResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-def _pick_model_id(req: GenerateRequest) -> str:
+def _pick_model_id(req: ControlNetGenerateRequest) -> str:
     settings = get_settings()
     model_type = (req.model_type or "").lower()
     if model_type not in {"sd15", "sdxl"}:
@@ -79,18 +116,16 @@ def _sampler_to_scheduler(sampler: str) -> Tuple[str, Dict[str, Any]]:
     if name in {"euler", "heun"}:
         return "EulerAncestral", {}
     if name.startswith("dpm++"):
-        # Best-effort mapping to DPMSolverMultistep; we keep kwargs conservative.
         kwargs: Dict[str, Any] = {"use_karras_sigmas": "karras" in name}
         if "sde" in name:
             kwargs["algorithm_type"] = "sde-dpmsolver++"
         return "DPMSolverMultistep", kwargs
-
     return "DPMSolverMultistep", {}
 
 
 def _job_dir(job_id: str) -> Path:
     app_paths = get_app_paths()
-    return app_paths.outputs / "t2i" / job_id
+    return app_paths.outputs / "controlnet" / job_id
 
 
 def _safe_resolve(path: Path, root: Path) -> Path:
@@ -101,26 +136,54 @@ def _safe_resolve(path: Path, root: Path) -> Path:
     return resolved
 
 
-def _run_generate_sync(req: GenerateRequest, job_id: str) -> Dict[str, Any]:
+def _decode_data_url(data_url: str) -> Image.Image:
+    if not data_url:
+        raise ValueError("Missing control_image")
+
+    payload = data_url.strip()
+    if payload.startswith("data:"):
+        try:
+            _, payload = payload.split(",", 1)
+        except ValueError as exc:
+            raise ValueError("Invalid data URL") from exc
+
+    raw = base64.b64decode(payload, validate=False)
+    img = Image.open(BytesIO(raw))
+    return img.convert("RGB")
+
+
+def _default_controlnet_model(control_type: str, model_id: str) -> str:
+    is_sdxl = "xl" in (model_id or "").lower()
+    family = "sdxl" if is_sdxl else "sd15"
+    return DEFAULT_CONTROLNET_MODELS[control_type][family]
+
+
+def _run_generate_controlnet_sync(
+    req: ControlNetGenerateRequest,
+    job_id: str,
+    control_type: str,
+    control_image: Image.Image,
+) -> Dict[str, Any]:
     settings = get_settings()
+
+    if control_type not in ALLOWED_CONTROL_TYPES:
+        raise HTTPException(status_code=404, detail="Unknown control type")
 
     if req.width % 8 != 0 or req.height % 8 != 0:
         raise HTTPException(status_code=400, detail="Width/height must be multiples of 8")
-
     if req.batch_size > settings.api.max_batch_size:
         raise HTTPException(
             status_code=400,
             detail=f"batch_size exceeds limit ({settings.api.max_batch_size})",
         )
     if req.steps > settings.api.max_steps:
-        raise HTTPException(
-            status_code=400, detail=f"steps exceeds limit ({settings.api.max_steps})"
-        )
+        raise HTTPException(status_code=400, detail=f"steps exceeds limit ({settings.api.max_steps})")
 
     seed = req.seed if req.seed >= 0 else secrets.randbelow(2**32)
     model_id = _pick_model_id(req)
     scheduler_name, scheduler_kwargs = _sampler_to_scheduler(req.sampler)
 
+    controlnet_model = req.controlnet_model or _default_controlnet_model(control_type, model_id)
     output_dir = _job_dir(job_id)
 
     manager = get_pipeline_manager()
@@ -128,10 +191,7 @@ def _run_generate_sync(req: GenerateRequest, job_id: str) -> Dict[str, Any]:
     with PIPELINE_LOCK:
         if not manager.pipeline_loaded or manager.current_model != model_id:
             if not manager.load_model(model_id):
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Failed to load model: {model_id}",
-                )
+                raise HTTPException(status_code=503, detail=f"Failed to load model: {model_id}")
 
         manager.set_scheduler(scheduler_name, **scheduler_kwargs)
 
@@ -163,7 +223,16 @@ def _run_generate_sync(req: GenerateRequest, job_id: str) -> Dict[str, Any]:
             clip_skip=req.clip_skip,
         )
 
-        result = manager.generate(params)
+        result = manager.generate_with_controlnet(
+            params,
+            control_image=control_image,
+            control_type=control_type,
+            controlnet_model=controlnet_model,
+            controlnet_conditioning_scale=req.weight,
+            preprocess=req.preprocess,
+            canny_low_threshold=req.canny_low_threshold,
+            canny_high_threshold=req.canny_high_threshold,
+        )
         saved = manager.save_generation_result(result, output_dir)
 
     return {
@@ -174,19 +243,36 @@ def _run_generate_sync(req: GenerateRequest, job_id: str) -> Dict[str, Any]:
     }
 
 
-@router.post("/generate", response_model=GenerateResponse)
-async def generate(req: GenerateRequest, request: Request):
-    job_id = str(uuid.uuid4())
+@router.get("/types")
+async def list_controlnet_types() -> Dict[str, Any]:
+    return {"types": sorted(ALLOWED_CONTROL_TYPES), "defaults": DEFAULT_CONTROLNET_MODELS}
 
-    payload = await asyncio.to_thread(_run_generate_sync, req, job_id)
+
+@router.post("/{control_type}", response_model=ControlNetGenerateResponse)
+async def generate_controlnet(
+    control_type: str, req: ControlNetGenerateRequest, request: Request
+):
+    if control_type not in ALLOWED_CONTROL_TYPES:
+        raise HTTPException(status_code=404, detail="Unknown control type")
+
+    try:
+        control_image = _decode_data_url(req.control_image)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    job_id = str(uuid.uuid4())
+    payload = await asyncio.to_thread(
+        _run_generate_controlnet_sync, req, job_id, control_type, control_image
+    )
 
     base = str(request.base_url).rstrip("/")
     image_urls = [
-        f"{base}/api/v1/t2i/images/{job_id}/{p.name}" for p in payload["saved_paths"]
+        f"{base}/api/v1/controlnet/images/{job_id}/{p.name}"
+        for p in payload["saved_paths"]
         if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
     ]
 
-    return GenerateResponse(
+    return ControlNetGenerateResponse(
         status="success",
         job_id=job_id,
         image_path=image_urls,
@@ -197,7 +283,7 @@ async def generate(req: GenerateRequest, request: Request):
 
 
 @router.get("/images/{job_id}/{filename}")
-async def get_image(job_id: str, filename: str):
+async def get_controlnet_image(job_id: str, filename: str):
     if "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 

@@ -1,16 +1,22 @@
-# core/config.py - Fixed Unified Configuration Management
+# core/config.py - Unified Configuration Management (AI_WAREHOUSE 3.0 compliant)
 """
-統一設定管理系統 - 修正版本，包含所有缺失的屬性和方法
+統一設定管理系統
+
+This project follows the workstation storage spec in `~/Desktop/data_model_structure.md`:
+- Code lives under `/mnt/c/ai_projects`
+- Models live under `/mnt/c/ai_models`
+- AI caches live under `/mnt/c/ai_cache` (never under `~/.cache`)
+- Datasets and outputs live under `/mnt/data`
 """
 
-import os
-import yaml
 import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+import os
 from dataclasses import dataclass
 from functools import lru_cache
-import pydantic
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -21,14 +27,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CachePaths:
-    """Shared cache directory paths"""
+    """Unified storage paths (cross-mount, AI_WAREHOUSE 3.0)."""
 
-    root: Path
-    models: Path
-    datasets: Path
-    outputs: Path
-    cache: Path
-    runs: Path
+    # Cache root (2TB, /mnt/c)
+    root: Path  # e.g. /mnt/c/ai_cache
+    cache: Path  # alias of root for compatibility
+
+    # Models (2TB, /mnt/c)
+    models: Path  # e.g. /mnt/c/ai_models
+
+    # Datasets and runs (4TB, /mnt/data)
+    datasets: Path  # e.g. /mnt/data/datasets/<project_slug>
+    runs: Path  # e.g. /mnt/data/training/runs/<project_slug>
+    outputs: Path  # e.g. /mnt/data/training/runs/<project_slug>/outputs
 
     # AI Framework cache paths
     hf_home: Path
@@ -37,36 +48,58 @@ class CachePaths:
     transformers: Path
 
     @classmethod
-    def from_root(cls, cache_root: str) -> "CachePaths":
-        """Create cache paths from root directory"""
-        root = Path(cache_root).resolve()
+    def from_settings(cls, settings: "AppSettings") -> "CachePaths":
+        """Create paths from settings (AI_WAREHOUSE 3.0)."""
+        project_slug = settings.project_slug
+
+        cache_root = Path(settings.ai_cache_root).resolve()
+        models_root = Path(settings.ai_models_root).resolve()
+
+        datasets_root = (Path(settings.ai_datasets_root).resolve() / project_slug).resolve()
+        runs_root = (
+            Path(settings.ai_training_root).resolve() / "runs" / project_slug
+        ).resolve()
+        outputs_root = (runs_root / "outputs").resolve()
+
+        # Respect explicit env vars when present, but default to the prescribed paths.
+        xdg_cache_home = Path(os.getenv("XDG_CACHE_HOME", str(cache_root))).resolve()
+        hf_home = Path(os.getenv("HF_HOME", str(cache_root / "huggingface"))).resolve()
+        transformers_cache = Path(
+            os.getenv("TRANSFORMERS_CACHE", str(hf_home))
+        ).resolve()
+        torch_home = Path(os.getenv("TORCH_HOME", str(cache_root / "torch"))).resolve()
+        hf_hub = Path(os.getenv("HF_HUB_CACHE", str(hf_home / "hub"))).resolve()
+
+        # Keep internal root consistent with XDG_CACHE_HOME.
+        cache_root = xdg_cache_home
 
         return cls(
-            root=root,
-            models=root / "models",
-            datasets=root / "datasets",
-            outputs=root / "outputs",
-            cache=root / "cache",
-            runs=root / "runs",
-            hf_home=root / "cache" / "hf",
-            torch_home=root / "cache" / "torch",
-            hf_hub=root / "cache" / "hf" / "hub",
-            transformers=root / "cache" / "hf" / "transformers",
+            root=cache_root,
+            cache=cache_root,
+            models=models_root,
+            datasets=datasets_root,
+            runs=runs_root,
+            outputs=outputs_root,
+            hf_home=hf_home,
+            transformers=transformers_cache,
+            torch_home=torch_home,
+            hf_hub=hf_hub,
         )
 
     def create_all(self) -> None:
-        """Create all cache directories"""
-        for path in [
+        """Create all required directories."""
+        for path in {
+            self.root,
+            self.cache,
             self.models,
             self.datasets,
-            self.outputs,
-            self.cache,
             self.runs,
+            self.outputs,
             self.hf_home,
             self.torch_home,
             self.hf_hub,
             self.transformers,
-        ]:
+        }:
             path.mkdir(parents=True, exist_ok=True)
 
 
@@ -83,6 +116,7 @@ class AppPaths:
     models_sdxl: Path
     models_controlnet: Path
     lora_weights: Path
+    lora_weights_sdxl: Path
     embeddings: Path
 
     # Data paths
@@ -104,15 +138,16 @@ class AppPaths:
             configs=project_root / "configs",
             outputs=cache_paths.outputs,  # Add outputs path
             # Model paths
-            models_sd15=cache_paths.models / "sd15",
-            models_sdxl=cache_paths.models / "sdxl",
+            models_sd15=cache_paths.models / "stable-diffusion" / "sd15",
+            models_sdxl=cache_paths.models / "stable-diffusion" / "sdxl",
             models_controlnet=cache_paths.models / "controlnet",
             lora_weights=cache_paths.models / "lora",
+            lora_weights_sdxl=cache_paths.models / "lora_sdxl",
             embeddings=cache_paths.models / "embeddings",
             # Data paths
             datasets_raw=cache_paths.datasets / "raw",
             datasets_processed=cache_paths.datasets / "processed",
-            training_runs=cache_paths.runs / "training",
+            training_runs=cache_paths.runs,
             exports=cache_paths.outputs / "exports",
         )
 
@@ -213,8 +248,6 @@ class CeleryConfig(BaseSettings):
     task_routes: Dict[str, str] = Field(
         default_factory=lambda: {
             "workers.tasks.training.*": "training",
-            "workers.tasks.generation.*": "generation",
-            "workers.tasks.batch.*": "batch",
         }
     )
 
@@ -234,8 +267,14 @@ class AppSettings(BaseSettings):
         default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$"
     )
 
-    # Cache configuration
-    ai_cache_root: str = Field(default="../ai_warehouse/cache")
+    # Project identity (used to create per-project folders under /mnt/data)
+    project_slug: str = Field(default="charaforge-t2i-lab")
+
+    # AI_WAREHOUSE 3.0 roots
+    ai_models_root: str = Field(default="/mnt/c/ai_models")
+    ai_cache_root: str = Field(default="/mnt/c/ai_cache")
+    ai_datasets_root: str = Field(default="/mnt/data/datasets")
+    ai_training_root: str = Field(default="/mnt/data/training")
 
     # Redis URL - Add missing redis_url property
     redis_url: str = Field(default="redis://localhost:6379/0")
@@ -326,7 +365,7 @@ def get_cache_paths() -> CachePaths:
     global _cache_paths_instance
     if _cache_paths_instance is None:
         settings = get_settings()
-        _cache_paths_instance = CachePaths.from_root(settings.ai_cache_root)
+        _cache_paths_instance = CachePaths.from_settings(settings)
         _cache_paths_instance.create_all()
 
         logger.info(f"Cache paths initialized: {_cache_paths_instance.root}")
@@ -350,6 +389,7 @@ def get_app_paths() -> AppPaths:
             _app_paths_instance.models_sdxl,
             _app_paths_instance.models_controlnet,
             _app_paths_instance.lora_weights,
+            _app_paths_instance.lora_weights_sdxl,
             _app_paths_instance.embeddings,
             _app_paths_instance.datasets_raw,
             _app_paths_instance.datasets_processed,
@@ -420,11 +460,15 @@ def setup_environment_variables() -> None:
     cache_paths = get_cache_paths()
 
     env_vars = {
+        # Force caches out of $HOME per data_model_structure.md
+        "XDG_CACHE_HOME": str(cache_paths.cache),
         "HF_HOME": str(cache_paths.hf_home),
         "TRANSFORMERS_CACHE": str(cache_paths.transformers),
         "HF_HUB_CACHE": str(cache_paths.hf_hub),
+        "HUGGINGFACE_HUB_CACHE": str(cache_paths.hf_hub),
         "TORCH_HOME": str(cache_paths.torch_home),
         "PYTORCH_KERNEL_CACHE_PATH": str(cache_paths.torch_home / "kernels"),
+        "PIP_CACHE_DIR": str(cache_paths.cache / "pip"),
     }
 
     for key, value in env_vars.items():
@@ -483,21 +527,31 @@ def validate_cache_setup() -> Dict[str, Any]:
 
         validation_results["paths_checked"].append(result)
 
-    # Check disk space
+    # Check disk space on configured roots (avoids probing unrelated mounts).
     try:
         import shutil
 
-        total, used, free = shutil.disk_usage(cache_paths.root)
-        free_gb = free / (1024**3)
+        check_paths = {
+            cache_paths.root,
+            cache_paths.models,
+            cache_paths.datasets,
+            cache_paths.runs,
+            cache_paths.outputs,
+        }
 
-        if free_gb < 5.0:  # Less than 5GB free
-            validation_results["warnings"].append(
-                f"Low disk space: {free_gb:.1f}GB free"
-            )
-        elif free_gb < 1.0:  # Less than 1GB free
-            validation_results["errors"].append(
-                f"Very low disk space: {free_gb:.1f}GB free"
-            )
+        for target in sorted(check_paths):
+            if not target.exists():
+                continue
+            total, used, free = shutil.disk_usage(target)
+            free_gb = free / (1024**3)
+            if free_gb < 1.0:
+                validation_results["errors"].append(
+                    f"Very low disk space on {target}: {free_gb:.1f}GB free"
+                )
+            elif free_gb < 5.0:
+                validation_results["warnings"].append(
+                    f"Low disk space on {target}: {free_gb:.1f}GB free"
+                )
 
     except Exception as e:
         validation_results["warnings"].append(f"Could not check disk space: {e}")
@@ -517,12 +571,12 @@ def validate_cache_setup() -> Dict[str, Any]:
 def bootstrap_config(verbose: bool = False) -> Dict[str, Any]:
     """Bootstrap the entire configuration system"""
     if verbose:
-        print("🔧 Bootstrapping SagaForge T2I Lab configuration...")
+        print("🔧 Bootstrapping CharaForge T2I Lab configuration...")
 
     # Load settings
     settings = get_settings()
     cache_paths = get_cache_paths()
-    app_paths = get_app_paths()
+    get_app_paths()
 
     # Setup environment variables
     setup_environment_variables()
@@ -540,7 +594,7 @@ def bootstrap_config(verbose: bool = False) -> Dict[str, Any]:
     }
 
     if verbose:
-        print(f"✅ Configuration bootstrap completed")
+        print("✅ Configuration bootstrap completed")
         print(f"   Cache root: {cache_paths.root}")
         print(f"   Environment: {settings.environment}")
         print(f"   Validation: {validation['status']}")
@@ -581,11 +635,22 @@ def get_config_summary() -> Dict[str, Any]:
     return {
         "environment": settings.environment,
         "debug": settings.debug,
-        "cache_root": str(cache_paths.root),
+        "project_slug": settings.project_slug,
+        "cache_root": str(cache_paths.cache),
+        "models_root": str(cache_paths.models),
+        "datasets_root": str(cache_paths.datasets),
+        "runs_root": str(cache_paths.runs),
+        "outputs_root": str(cache_paths.outputs),
         "project_root": str(app_paths.root),
         "api_host": f"{settings.api.host}:{settings.api.port}",
         "celery_broker": settings.celery.broker_url,
         "redis_url": settings.redis_url,
+        "framework_caches": {
+            "HF_HOME": os.getenv("HF_HOME"),
+            "TRANSFORMERS_CACHE": os.getenv("TRANSFORMERS_CACHE"),
+            "TORCH_HOME": os.getenv("TORCH_HOME"),
+            "XDG_CACHE_HOME": os.getenv("XDG_CACHE_HOME"),
+        },
         "model_defaults": {
             "sd15": settings.model.default_sd15_model,
             "sdxl": settings.model.default_sdxl_model,

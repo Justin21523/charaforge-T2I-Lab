@@ -3,7 +3,6 @@
 import os
 import sys
 from pathlib import Path
-import subprocess
 
 
 def check_python_version():
@@ -18,30 +17,45 @@ def setup_environment():
     """設置環境變數和目錄"""
     print("設置環境...")
 
-    # 設置 AI_CACHE_ROOT
-    cache_root = os.getenv("AI_CACHE_ROOT", "../ai_warehouse/cache")
-    cache_path = Path(cache_root).absolute()
+    # AI_WAREHOUSE 3.0 defaults (see ~/Desktop/data_model_structure.md)
+    project_slug = os.getenv("PROJECT_SLUG", "charaforge-t2i-lab")
+    models_root = Path(os.getenv("AI_MODELS_ROOT", "/mnt/c/ai_models")).absolute()
+    cache_root = Path(os.getenv("AI_CACHE_ROOT", "/mnt/c/ai_cache")).absolute()
+    datasets_root = Path(os.getenv("AI_DATASETS_ROOT", "/mnt/data/datasets")).absolute()
+    training_root = Path(os.getenv("AI_TRAINING_ROOT", "/mnt/data/training")).absolute()
 
-    print(f"創建快取目錄: {cache_path}")
+    # Framework caches (force out of $HOME)
+    os.environ.setdefault("XDG_CACHE_HOME", str(cache_root))
+    os.environ.setdefault("HF_HOME", str(cache_root / "huggingface"))
+    os.environ.setdefault("TRANSFORMERS_CACHE", str(cache_root / "huggingface"))
+    os.environ.setdefault("TORCH_HOME", str(cache_root / "torch"))
 
-    # 創建必要目錄
+    project_datasets = datasets_root / project_slug
+    project_runs = training_root / "runs" / project_slug
+
+    print(f"Models:   {models_root}")
+    print(f"Caches:   {cache_root}")
+    print(f"Datasets: {project_datasets}")
+    print(f"Runs:     {project_runs}")
+
     directories = [
-        cache_path,
-        cache_path / "models" / "sd",
-        cache_path / "models" / "sdxl",
-        cache_path / "models" / "controlnet",
-        cache_path / "models" / "lora",
-        cache_path / "models" / "ipadapter",
-        cache_path / "datasets" / "raw",
-        cache_path / "datasets" / "processed",
-        cache_path / "datasets" / "metadata",
-        cache_path / "cache" / "hf",
-        cache_path / "cache" / "torch",
-        cache_path / "runs",
-        cache_path / "outputs" / "t2i",
-        cache_path / "outputs" / "batch",
-        cache_path / "outputs" / "exports",
-        Path("logs"),
+        # /mnt/c (models + caches)
+        models_root / "stable-diffusion" / "sd15",
+        models_root / "stable-diffusion" / "sdxl",
+        models_root / "controlnet",
+        models_root / "lora",
+        models_root / "lora_sdxl",
+        models_root / "embeddings",
+        cache_root / "huggingface",
+        cache_root / "torch",
+        cache_root / "pip",
+        # /mnt/data (datasets + outputs)
+        project_datasets / "raw",
+        project_datasets / "processed",
+        training_root / "logs" / project_slug,
+        project_runs / "outputs" / "generation",
+        project_runs / "outputs" / "batch",
+        project_runs / "outputs" / "exports",
     ]
 
     for directory in directories:
@@ -55,7 +69,15 @@ def setup_environment():
         with open(env_file, "w") as f:
             f.write(
                 f"""# CharaForge T2I Lab 環境設定
-AI_CACHE_ROOT={cache_path}
+PROJECT_SLUG={project_slug}
+AI_MODELS_ROOT={models_root}
+AI_CACHE_ROOT={cache_root}
+XDG_CACHE_HOME={cache_root}
+HF_HOME={cache_root / 'huggingface'}
+TRANSFORMERS_CACHE={cache_root / 'huggingface'}
+TORCH_HOME={cache_root / 'torch'}
+AI_DATASETS_ROOT={datasets_root}
+AI_TRAINING_ROOT={training_root}
 CUDA_VISIBLE_DEVICES=0
 API_HOST=0.0.0.0
 API_PORT=8000
@@ -99,7 +121,7 @@ def check_dependencies():
             missing_packages.append(package)
 
     if missing_packages:
-        print(f"\n請安裝缺少的套件:")
+        print("\n請安裝缺少的套件:")
         print(f"pip install {' '.join(missing_packages)}")
         return False
 
@@ -157,7 +179,7 @@ def main():
     deps_ok = check_dependencies()
 
     # 檢查 GPU
-    gpu_ok = check_gpu()
+    check_gpu()
 
     # 檢查 Redis
     redis_ok = check_redis()

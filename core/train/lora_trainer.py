@@ -1,16 +1,21 @@
 # core/train/lora_trainer.py - LoRA training implementation
-from typing import Dict, Tuple, List, Any, Optional, Callable, Generator
 import json
-import os
 import logging
-from datetime import datetime
+import math
+import time
 from pathlib import Path
-import torch, os, math, time
-import torch.nn.functional as F
+from typing import Any, Callable, Dict, List, Optional
+
 import numpy as np
-from accelerate import Accelerator
-from torch.utils.data import DataLoader
-from PIL import Image
+import torch
+import torch.nn.functional as F
+
+# Accelerate for distributed training
+from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate.logging import get_logger
+from accelerate.utils import ProjectConfiguration, set_seed
+from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
+from diffusers.optimization import get_scheduler
 
 # Diffusers and training imports
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
@@ -20,30 +25,31 @@ from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import
     StableDiffusionXLPipeline,
 )
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
-
-from diffusers.optimization import get_scheduler
-from diffusers.utils.import_utils import is_wandb_available
 from diffusers.utils import check_min_version
 
 # PEFT and LoRA imports
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel
-
-# Accelerate for distributed training
-from accelerate import Accelerator, DistributedDataParallelKwargs
-from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
+from peft import LoraConfig, TaskType, get_peft_model
+from PIL import Image
+from torch.utils.data import DataLoader
 
 # Transformers
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
-from core.config import get_run_output_dir, get_cache_paths
+from core.config import get_cache_paths
 from core.train.dataset import T2IDataset
-from core.train.evaluators import CLIPEvaluator, FaceConsistencyEvaluator
+
+try:
+    from core.train.evaluators import CLIPEvaluator, FaceConsistencyEvaluator  # type: ignore
+except Exception:  # pragma: no cover
+    CLIPEvaluator = None  # type: ignore
+    FaceConsistencyEvaluator = None  # type: ignore
 
 
-# Check minimum versions
-check_min_version("0.28.0")
+# Check minimum versions (keep training importable across environments).
+try:
+    check_min_version("0.24.0")
+except Exception:
+    pass
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -87,8 +93,8 @@ class LoRATrainer:
         self.noise_scheduler = None
 
         # Evaluators
-        self.clip_evaluator = CLIPEvaluator()
-        self.face_evaluator = FaceConsistencyEvaluator()
+        self.clip_evaluator = CLIPEvaluator() if CLIPEvaluator else None
+        self.face_evaluator = FaceConsistencyEvaluator() if FaceConsistencyEvaluator else None
 
     def _setup_logging(self):
         """Setup logging configuration"""
@@ -260,7 +266,7 @@ class LoRATrainer:
         )
         total_params = sum(p.numel() for p in self.unet.parameters())
 
-        self.logger.info(f"LoRA setup complete:")
+        self.logger.info("LoRA setup complete:")
         self.logger.info(f"  - Rank: {lora_config.r}")
         self.logger.info(f"  - Alpha: {lora_config.lora_alpha}")
         self.logger.info(f"  - Trainable parameters: {trainable_params:,}")
@@ -293,6 +299,26 @@ class LoRATrainer:
         # Setup optimizer
         optimizer = self._setup_optimizer()
 
+        # Calculate training steps (needed for scheduler setup)
+        num_update_steps_per_epoch = max(
+            1,
+            len(train_dataloader) // self.config.get("gradient_accumulation_steps", 1),
+        )
+        num_epochs = int(
+            self.config.get("num_epochs")
+            or self.config.get("num_train_epochs")
+            or 10
+        )
+        max_train_steps = self.config.get("max_train_steps")
+
+        if max_train_steps is None:
+            max_train_steps = num_epochs * num_update_steps_per_epoch
+        else:
+            num_epochs = max(1, math.ceil(max_train_steps / num_update_steps_per_epoch))
+
+        # Ensure scheduler sees the resolved max_train_steps.
+        self.config["max_train_steps"] = max_train_steps
+
         # Setup learning rate scheduler
         lr_scheduler = self._setup_lr_scheduler(optimizer, len(train_dataloader))
 
@@ -301,21 +327,7 @@ class LoRATrainer:
             self.unet, optimizer, train_dataloader, lr_scheduler
         )
 
-        # Calculate training steps
-        num_update_steps_per_epoch = max(
-            1,
-            len(train_dataloader) // self.config.get("gradient_accumulation_steps", 1),
-        )
-        max_train_steps = self.config.get("max_train_steps")
-
-        if max_train_steps is None:
-            max_train_steps = (
-                self.config.get("num_epochs", 10) * num_update_steps_per_epoch
-            )
-        else:
-            num_epochs = max_train_steps // num_update_steps_per_epoch
-
-        self.logger.info(f"Training configuration:")
+        self.logger.info("Training configuration:")
         self.logger.info(
             f"  - Total batch size: {self.config.get('train_batch_size', 1) * self.accelerator.num_processes}"
         )
@@ -335,7 +347,6 @@ class LoRATrainer:
             self.unet.train()
 
             epoch_loss = 0.0
-            progress_bar = range(len(train_dataloader))
 
             for step, batch in enumerate(train_dataloader):
                 with self.accelerator.accumulate(self.unet):
@@ -612,7 +623,10 @@ class LoRATrainer:
 
         # Save LoRA weights
         unwrapped_unet = self.accelerator.unwrap_model(self.unet)
-        unwrapped_unet.save_pretrained(checkpoint_dir)
+        try:
+            unwrapped_unet.save_pretrained(checkpoint_dir, safe_serialization=True)
+        except TypeError:
+            unwrapped_unet.save_pretrained(checkpoint_dir)
 
         # Save training state
         state = {
@@ -668,8 +682,8 @@ class LoRATrainer:
 
                 self.logger.info(f"Generated validation sample: {sample_path.name}")
 
-            # Run evaluation metrics
-            if len(validation_images) > 1:
+            # Run evaluation metrics (optional deps)
+            if self.clip_evaluator and len(validation_images) > 1:
                 # CLIP evaluation
                 try:
                     clip_scores = self.clip_evaluator.compute_text_image_similarity(

@@ -1,14 +1,21 @@
 # core/t2i/pipeline.py - Unified Text-to-Image Pipeline Manager
-from typing import Dict, List, Optional, Union, Tuple, Any, Callable
-from pathlib import Path
-import logging
-import torch
-import numpy as np
-from PIL import Image
-from dataclasses import dataclass, asdict
 import json
+import logging
+import threading
 import time
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import torch
+from PIL import Image
+
+try:
+    import cv2  # type: ignore
+except Exception:  # pragma: no cover
+    cv2 = None  # type: ignore
 
 # Diffusers
 
@@ -18,25 +25,27 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
 from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
     StableDiffusionXLPipeline,
 )
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_dpmsolver_multistep import (
     DPMSolverMultistepScheduler,
 )
 from diffusers.schedulers.scheduling_euler_ancestral_discrete import (
     EulerAncestralDiscreteScheduler,
 )
-from diffusers.schedulers.scheduling_ddim import DDIMScheduler
-from diffusers.schedulers.scheduling_pndm import PNDMScheduler
 from diffusers.schedulers.scheduling_lms_discrete import LMSDiscreteScheduler
+from diffusers.schedulers.scheduling_pndm import PNDMScheduler
 
 # Core components
-from core.config import get_cache_paths, get_model_config
-from core.t2i.lora_manager import get_lora_manager, LoRAStack
+from core.config import get_cache_paths
+from core.t2i.lora_manager import get_lora_manager
 from core.t2i.safety import SafetyChecker
 from core.t2i.watermark import WatermarkProcessor
-from core.train.registry import get_model_registry
-
+from core.train.registry import ModelEntry, get_model_registry
 
 logger = logging.getLogger(__name__)
+
+# One global lock to serialize pipeline mutations/generation.
+PIPELINE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -120,7 +129,93 @@ class T2IPipelineManager:
         self.attention_slicing = True
         self.memory_efficient_attention = True
 
+        # ControlNet (lazy-loaded)
+        self._controlnet_models: Dict[str, Any] = {}
+
         logger.info(f"T2I Pipeline Manager initialized on {self.device}")
+
+    def _pipeline_dtype(self) -> torch.dtype:
+        return torch.float16 if self.device.type == "cuda" else torch.float32
+
+    def _resolve_controlnet_id(self, controlnet_id: str) -> Tuple[str, Optional[Path]]:
+        entry = self.model_registry.get_model(controlnet_id)
+        if entry and entry.path:
+            try:
+                p = Path(entry.path)
+                return controlnet_id, p if p.is_absolute() else None
+            except Exception:
+                return controlnet_id, None
+        return controlnet_id, None
+
+    def _get_controlnet_model(self, controlnet_id: str):
+        """Load (and cache) a ControlNet model by id/path/registry entry."""
+        resolved_id, resolved_path = self._resolve_controlnet_id(controlnet_id)
+        cache_key = str(resolved_path) if resolved_path else resolved_id
+
+        if cache_key in self._controlnet_models:
+            return self._controlnet_models[cache_key]
+
+        from diffusers.models import ControlNetModel  # local import (optional in minimal env)
+
+        dtype = self._pipeline_dtype()
+
+        if resolved_path and resolved_path.exists():
+            if resolved_path.is_dir():
+                model = ControlNetModel.from_pretrained(
+                    str(resolved_path),
+                    torch_dtype=dtype,
+                    cache_dir=self.cache_paths.hf_home,
+                    use_safetensors=True,
+                )
+            else:
+                # Best-effort support for single-file checkpoints (diffusers>=0.23).
+                if hasattr(ControlNetModel, "from_single_file"):
+                    model = ControlNetModel.from_single_file(  # type: ignore[attr-defined]
+                        str(resolved_path),
+                        torch_dtype=dtype,
+                    )
+                else:
+                    raise ValueError(
+                        "ControlNet single-file loading is not supported; use a diffusers folder"
+                    )
+        else:
+            model = ControlNetModel.from_pretrained(
+                resolved_id,
+                torch_dtype=dtype,
+                cache_dir=self.cache_paths.hf_home,
+                use_safetensors=True,
+            )
+
+        model.to(self.device)
+        self._controlnet_models[cache_key] = model
+        return model
+
+    def _preprocess_control_image(
+        self,
+        image: Image.Image,
+        control_type: str,
+        width: int,
+        height: int,
+        *,
+        canny_low_threshold: int = 100,
+        canny_high_threshold: int = 200,
+    ) -> Image.Image:
+        control_type = (control_type or "").strip().lower()
+        img = image.convert("RGB")
+
+        if control_type in {"canny", "lineart", "pose"}:
+            if cv2 is not None:
+                arr = np.array(img)
+                gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+                edges = cv2.Canny(gray, canny_low_threshold, canny_high_threshold)
+                edges_rgb = np.stack([edges] * 3, axis=-1)
+                img = Image.fromarray(edges_rgb.astype(np.uint8))
+            else:  # pragma: no cover
+                img = img.convert("L").convert("RGB")
+        elif control_type == "depth":
+            img = img.convert("L").convert("RGB")
+
+        return img.resize((width, height), resample=Image.BICUBIC)
 
     def _get_device(self, device: str) -> torch.device:
         """Get appropriate device"""
@@ -136,11 +231,19 @@ class T2IPipelineManager:
                 logger.info(f"Model already loaded: {model_name}")
                 return True
 
-            # Get model info from registry
+            # Get model info from registry (fallback: allow direct HF model ids)
             model_entry = self.model_registry.get_model(model_name)
             if not model_entry:
-                logger.error(f"Model not found in registry: {model_name}")
-                return False
+                model_type = "sdxl" if "xl" in model_name.lower() else "sd15"
+                model_entry = ModelEntry(
+                    name=model_name,
+                    path=model_name,
+                    model_type=model_type,
+                    description="Direct model id (auto-registered)",
+                    tags=["base_model", model_type],
+                    created_at=datetime.now().isoformat(),
+                )
+                self.model_registry.register_model(model_entry)
 
             # Determine model type
             self.is_sdxl = (
@@ -393,6 +496,166 @@ class T2IPipelineManager:
             logger.error(f"Error during generation: {e}")
             raise
 
+    def generate_with_controlnet(
+        self,
+        params: Union[GenerationParams, Dict[str, Any]],
+        *,
+        control_image: Image.Image,
+        control_type: str,
+        controlnet_model: str,
+        controlnet_conditioning_scale: float = 1.0,
+        preprocess: bool = True,
+        canny_low_threshold: int = 100,
+        canny_high_threshold: int = 200,
+        **kwargs,
+    ) -> GenerationResult:
+        """Generate images using ControlNet conditioning.
+
+        Notes:
+        - Requires a base model to be loaded (via `load_model()`).
+        - Uses the currently-loaded base pipeline components, so LoRAs apply.
+        """
+        if not self.pipeline_loaded:
+            raise RuntimeError("No model loaded. Call load_model() first.")
+
+        if isinstance(params, dict):
+            params = GenerationParams(**params)
+
+        # Override params with kwargs (same behavior as `generate`).
+        for key, value in kwargs.items():
+            if hasattr(params, key):
+                setattr(params, key, value)
+
+        if params.seed is None:
+            raise ValueError("ControlNet generation requires an explicit seed")
+
+        generator = torch.Generator(device=self.device).manual_seed(params.seed)
+
+        start_time = time.time()
+
+        # Prepare control image
+        if preprocess:
+            control = self._preprocess_control_image(
+                control_image,
+                control_type,
+                params.width,
+                params.height,
+                canny_low_threshold=canny_low_threshold,
+                canny_high_threshold=canny_high_threshold,
+            )
+        else:
+            control = control_image.convert("RGB").resize(
+                (params.width, params.height), resample=Image.BICUBIC
+            )
+
+        controlnet = self._get_controlnet_model(controlnet_model)
+
+        # Create a temporary ControlNet pipeline sharing the base components.
+        try:
+            if self.is_sdxl:
+                from diffusers.pipelines.controlnet.pipeline_controlnet_sd_xl import (
+                    StableDiffusionXLControlNetPipeline,
+                )
+
+                cn_pipe = StableDiffusionXLControlNetPipeline(
+                    **self.current_pipeline.components,  # type: ignore[union-attr]
+                    controlnet=controlnet,
+                )
+            else:
+                from diffusers.pipelines.controlnet.pipeline_controlnet import (
+                    StableDiffusionControlNetPipeline,
+                )
+
+                cn_pipe = StableDiffusionControlNetPipeline(
+                    **self.current_pipeline.components,  # type: ignore[union-attr]
+                    controlnet=controlnet,
+                )
+
+            cn_pipe.to(self.device)
+            if self.attention_slicing:
+                try:
+                    cn_pipe.enable_attention_slicing()
+                except Exception:
+                    pass
+            if self.memory_efficient_attention:
+                try:
+                    cn_pipe.enable_memory_efficient_attention()
+                except Exception:
+                    pass
+
+            gen_kwargs: Dict[str, Any] = {
+                "prompt": params.prompt,
+                "negative_prompt": params.negative_prompt,
+                "image": control,
+                "width": params.width,
+                "height": params.height,
+                "num_inference_steps": params.num_inference_steps,
+                "guidance_scale": params.guidance_scale,
+                "num_images_per_prompt": params.num_images_per_prompt,
+                "eta": params.eta,
+                "generator": generator,
+                "output_type": params.output_type,
+                "return_dict": params.return_dict,
+                "cross_attention_kwargs": params.cross_attention_kwargs,
+                "controlnet_conditioning_scale": float(controlnet_conditioning_scale),
+            }
+
+            if self.is_sdxl and params.clip_skip:
+                gen_kwargs["clip_skip"] = params.clip_skip
+
+            gen_kwargs = {k: v for k, v in gen_kwargs.items() if v is not None}
+
+            with torch.autocast(self.device.type, enabled=self.device.type == "cuda"):
+                result = cn_pipe(**gen_kwargs)
+
+            images = result.images if hasattr(result, "images") else [result]  # type: ignore
+        finally:
+            # Ensure pipeline wrapper is released; shared components remain loaded.
+            try:
+                del cn_pipe  # type: ignore[name-defined]
+            except Exception:
+                pass
+
+        generation_time = time.time() - start_time
+
+        safety_passed = True
+        if self.safety_checker:
+            images, safety_passed = self.safety_checker.check_images(
+                images, [params.prompt]  # type: ignore
+            )
+
+        watermarked = False
+        if self.watermark_processor and safety_passed:
+            images = self.watermark_processor.add_watermark(images)  # type: ignore
+            watermarked = True
+
+        return GenerationResult(
+            images=images,  # type: ignore
+            params=params,
+            metadata={
+                "model": self.current_model,
+                "is_sdxl": self.is_sdxl,
+                "device": str(self.device),
+                "scheduler": self.current_pipeline.scheduler.__class__.__name__,  # type: ignore[union-attr]
+                "lora_stack": (
+                    self.lora_manager.lora_stack.to_dict()
+                    if self.lora_manager.lora_stack.loras
+                    else None
+                ),
+                "controlnet": {
+                    "type": control_type,
+                    "model": controlnet_model,
+                    "scale": float(controlnet_conditioning_scale),
+                    "preprocess": bool(preprocess),
+                },
+                "generation_id": self._generate_id(),
+                "timestamp": datetime.now().isoformat(),
+            },
+            generation_time=generation_time,
+            safety_check_passed=safety_passed,
+            watermarked=watermarked,
+        )
+
     def generate_batch(
         self,
         prompts: List[str],
@@ -625,7 +888,7 @@ class T2IPipelineManager:
             logger.debug(f"Benchmark run {i+1}/{num_runs}")
 
             start_time = time.time()
-            result = self.generate(test_params)
+            self.generate(test_params)
             end_time = time.time()
 
             times.append(end_time - start_time)
@@ -659,7 +922,7 @@ class T2IPipelineManager:
             "timestamp": datetime.now().isoformat(),
         }
 
-        logger.info(f"Benchmark completed:")
+        logger.info("Benchmark completed:")
         logger.info(f"  Average time: {avg_time:.2f}s ± {std_time:.2f}s")
         logger.info(
             f"  Throughput: {benchmark_result['throughput_imgs_per_sec']:.2f} img/s"

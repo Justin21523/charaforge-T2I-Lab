@@ -5,13 +5,12 @@ CharaForge T2I Lab 環境設置驗證腳本
 檢查所有必要的依賴、配置和系統需求
 """
 
-import sys
-import os
-import subprocess
 import importlib
 import json
+import subprocess
+import sys
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 # 顏色代碼
@@ -394,7 +393,6 @@ def main():
 
     # 計算總分
     critical_checks = ["python", "redis", "directories", "config_files", "cache"]
-    optional_checks = ["gpu"]
 
     critical_passed = sum(
         1
@@ -422,15 +420,12 @@ def main():
     # 判斷整體狀態
     if critical_passed == total_critical and package_passed >= total_packages * 0.8:
         overall_status = "READY"
-        status_color = Colors.GREEN
         print_colored("🎉 環境設置完成，可以啟動 CharaForge T2I Lab！", Colors.GREEN)
     elif critical_passed >= total_critical * 0.8:
         overall_status = "PARTIAL"
-        status_color = Colors.YELLOW
         print_colored("⚠️  環境基本可用，但有些問題需要解決", Colors.YELLOW)
     else:
         overall_status = "NOT_READY"
-        status_color = Colors.RED
         print_colored("❌ 環境設置不完整，需要修正關鍵問題", Colors.RED)
 
     # 生成建議
@@ -448,7 +443,7 @@ def main():
     print_colored("2. pip install -r requirements.txt  # 安裝依賴", Colors.WHITE)
     print_colored("3. cp .env.example .env  # 複製環境變數", Colors.WHITE)
     print_colored("4. redis-server  # 啟動 Redis (另一個終端)", Colors.WHITE)
-    print_colored("5. python smoke_tests.py  # 執行測試", Colors.WHITE)
+    print_colored("5. python scripts/smoke_test_t2i.py --skip-api  # 執行測試", Colors.WHITE)
 
     # 儲存驗證結果
     results_file = Path("validation_results.json")

@@ -5,29 +5,18 @@ SagaForge T2I Lab Quick Setup Script
 """
 
 import os
-import sys
-import subprocess
 import platform
+import subprocess
+import sys
 from pathlib import Path
-import json
 
 
 def run_command(cmd, check=True, shell=False):
     """執行命令"""
-    try:
-        if isinstance(cmd, str) and not shell:
-            cmd = cmd.split()
+    if isinstance(cmd, str) and not shell:
+        cmd = cmd.split()
 
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, check=check, shell=shell
-        )
-        return result
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Command failed: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
-        print(f"   Error: {e.stderr}")
-        if check:
-            sys.exit(1)
-        return e
+    return subprocess.run(cmd, capture_output=True, text=True, check=check, shell=shell)
 
 
 def check_python_version():
@@ -85,12 +74,12 @@ def setup_conda_env():
     # Check if conda is available
     try:
         run_command("conda --version")
-    except:
+    except Exception:
         print("❌ Conda not found. Please install Anaconda or Miniconda first.")
         print("   Download from: https://docs.conda.io/en/latest/miniconda.html")
         return False
 
-    env_name = "sagaforge-t2i"
+    env_name = "ai_env"
 
     # Check if environment already exists
     result = run_command("conda env list", check=False)
@@ -99,7 +88,7 @@ def setup_conda_env():
 
         response = input(f"🤔 Recreate environment '{env_name}'? (y/N): ").lower()
         if response == "y":
-            print(f"🗑️ Removing existing environment...")
+            print("🗑️ Removing existing environment...")
             run_command(f"conda env remove -n {env_name} -y")
         else:
             print(f"✅ Using existing environment '{env_name}'")
@@ -135,7 +124,7 @@ def install_pytorch():
             if result.returncode == 0 and "CUDA Version" in result.stdout:
                 # Extract CUDA version (simplified)
                 cuda_version = "cu121"  # Default to recent version
-        except:
+        except Exception:
             pass
 
         if cuda_version:
@@ -183,7 +172,7 @@ def install_diffusers_packages():
             print(f"📦 Installing {package}...")
             run_command(f"pip install {package}")
             print(f"✅ {package} installed")
-        except:
+        except Exception:
             if package == "xformers":
                 print(f"⚠️ {package} installation failed (optional)")
             else:
@@ -209,7 +198,7 @@ def install_api_packages():
             print(f"📦 Installing {package}...")
             run_command(f"pip install {package}")
             print(f"✅ {package} installed")
-        except:
+        except Exception:
             print(f"❌ {package} installation failed")
 
 
@@ -235,7 +224,7 @@ def install_utility_packages():
             print(f"📦 Installing {package}...")
             run_command(f"pip install {package}")
             print(f"✅ {package} installed")
-        except:
+        except Exception:
             print(f"❌ {package} installation failed")
 
 
@@ -370,7 +359,7 @@ def install_redis():
         run_command("redis-server --version", check=False)
         print("✅ Redis is already installed")
         return True
-    except:
+    except Exception:
         pass
 
     system, _, _ = detect_system()
@@ -381,7 +370,7 @@ def install_redis():
             run_command("brew install redis")
             print("✅ Redis installed via Homebrew")
             return True
-        except:
+        except Exception:
             print("❌ Failed to install Redis via Homebrew")
 
     elif system == "linux":  # Linux
@@ -391,7 +380,7 @@ def install_redis():
             run_command("sudo apt install -y redis-server", shell=True)
             print("✅ Redis installed via apt")
             return True
-        except:
+        except Exception:
             print("❌ Failed to install Redis via apt")
 
     else:  # Windows
@@ -510,11 +499,11 @@ def main():
             print(f"❌ {step_name} failed: {e}")
 
     # Check GPU after PyTorch installation
-    print(f"\n🎮 Final GPU check...")
+    print("\n🎮 Final GPU check...")
     has_gpu, gpu_name, gpu_memory = check_gpu()
 
     # Run smoke test
-    print(f"\n🧪 Running smoke test...")
+    print("\n🧪 Running smoke test...")
     smoke_test_passed = run_smoke_test()
 
     # Final report
@@ -535,19 +524,19 @@ def main():
         print("🧪 Smoke test: ⚠️ Some issues (normal for first setup)")
 
     print("\n📋 Next Steps:")
-    print("1. Activate environment: conda activate sagaforge-t2i")
-    print("2. Start system: python scripts/start_system.py")
-    print("3. Or use shell script: bash scripts/start_t2i_system.sh")
-    print("4. Access API: http://localhost:8000/docs")
+    print("1. Activate environment: conda activate ai_env")
+    print("2. Start API: bash scripts/start_api.sh")
+    print("3. Start worker: bash scripts/start_worker.sh")
+    print("4. Access API docs: http://localhost:8000/docs")
     print("5. Run tests: bash scripts/test_api.sh")
 
     print("\n📚 Documentation:")
     print("- API docs: http://localhost:8000/docs")
-    print("- Health check: http://localhost:8000/healthz")
-    print("- System status: http://localhost:8000/t2i/system/status")
+    print("- Health check: http://localhost:8000/api/v1/health")
+    print("- Models: http://localhost:8000/api/v1/models")
 
     if success_count >= len(steps) * 0.8:
-        print("\n🎉 Setup successful! Ready to use SagaForge T2I Lab.")
+        print("\n🎉 Setup successful! Ready to use CharaForge T2I Lab.")
     else:
         print("\n⚠️ Setup completed with some issues. Check error messages above.")
 

@@ -1,14 +1,14 @@
 # core/t2i/lora_manager.py - Advanced LoRA loading, switching, and merging
-from typing import Dict, List, Optional, Union, Tuple, Any
-from pathlib import Path
 import json
 import logging
-from datetime import datetime
-import torch
-import torch.nn as F
-from dataclasses import dataclass, asdict
-import safetensors.torch as st
 from copy import deepcopy
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import safetensors.torch as st
+import torch
 
 # Diffusers and PEFT
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
@@ -17,16 +17,9 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
 from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import (
     StableDiffusionXLPipeline,
 )
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
-
-from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
-from peft import PeftModel, LoraConfig, get_peft_model
-from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 from core.config import get_cache_paths
-from core.train.registry import get_model_registry, ModelEntry
-
+from core.train.registry import ModelEntry, get_model_registry
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +95,19 @@ class LoRAManager:
     def load_base_model(self, model_name: str, **kwargs) -> bool:
         """Load base Stable Diffusion model"""
         try:
-            # Check if model is registered
+            # Prefer registry, but allow direct HF model ids.
             model_entry = self.model_registry.get_model(model_name)
             if not model_entry:
-                logger.error(f"Model not found in registry: {model_name}")
-                return False
+                model_type = "sdxl" if "xl" in model_name.lower() else "sd15"
+                model_entry = ModelEntry(
+                    name=model_name,
+                    path=model_name,
+                    model_type=model_type,
+                    description="Direct model id (auto-registered)",
+                    tags=["base_model", model_type],
+                    created_at=datetime.now().isoformat(),
+                )
+                self.model_registry.register_model(model_entry)
 
             # Determine model type
             self.is_sdxl = (
@@ -739,7 +740,7 @@ class LoRAManager:
                 / results["baseline_avg"]
             ) * 100
 
-        logger.info(f"Performance benchmark completed:")
+        logger.info("Performance benchmark completed:")
         logger.info(f"  Baseline: {results.get('baseline_avg', 0):.2f}s")
         logger.info(f"  With LoRAs: {results.get('lora_avg', 0):.2f}s")
         logger.info(f"  Overhead: {results.get('overhead_percent', 0):.1f}%")
