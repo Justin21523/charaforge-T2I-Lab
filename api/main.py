@@ -163,54 +163,6 @@ def create_app() -> FastAPI:
         }
 
     @app.middleware("http")
-    async def request_context(request: Request, call_next):
-        started = time.time()
-        request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
-        request.state.request_id = request_id
-
-        try:
-            response = await call_next(request)
-        except Exception as exc:
-            logger.exception(
-                "Unhandled exception request_id=%s method=%s path=%s",
-                request_id,
-                request.method,
-                request.url.path,
-            )
-            details = {"type": exc.__class__.__name__}
-            if settings.debug:
-                details["message"] = str(exc)
-            response = JSONResponse(
-                status_code=500,
-                content=_error_payload(
-                    request,
-                    code="INTERNAL_SERVER_ERROR",
-                    message="Internal server error",
-                    details=details,
-                ),
-            )
-
-        elapsed = time.time() - started
-        response.headers[REQUEST_ID_HEADER] = request_id
-        response.headers["X-Process-Time"] = f"{elapsed:.6f}"
-
-        try:
-            role = getattr(request.state, "auth_role", "unknown")
-            logger.info(
-                "request request_id=%s method=%s path=%s status=%s latency_ms=%s auth_role=%s",
-                request_id,
-                request.method,
-                request.url.path,
-                response.status_code,
-                int(elapsed * 1000),
-                role,
-            )
-        except Exception:
-            pass
-
-        return response
-
-    @app.middleware("http")
     async def auth_and_rate_limit(request: Request, call_next):
         path = request.url.path
         if not path.startswith(API_V1_PREFIX) or is_exempt_v1_request(request):
@@ -343,6 +295,54 @@ def create_app() -> FastAPI:
             response.headers["X-RateLimit-Bucket-Limit"] = str(bucket_result.limit)
             response.headers["X-RateLimit-Bucket-Remaining"] = str(bucket_result.remaining)
             response.headers["X-RateLimit-Bucket-Reset"] = str(bucket_result.reset_epoch)
+
+        return response
+
+    @app.middleware("http")
+    async def request_context(request: Request, call_next):
+        started = time.time()
+        request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
+        request.state.request_id = request_id
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.exception(
+                "Unhandled exception request_id=%s method=%s path=%s",
+                request_id,
+                request.method,
+                request.url.path,
+            )
+            details = {"type": exc.__class__.__name__}
+            if settings.debug:
+                details["message"] = str(exc)
+            response = JSONResponse(
+                status_code=500,
+                content=_error_payload(
+                    request,
+                    code="INTERNAL_SERVER_ERROR",
+                    message="Internal server error",
+                    details=details,
+                ),
+            )
+
+        elapsed = time.time() - started
+        response.headers[REQUEST_ID_HEADER] = request_id
+        response.headers["X-Process-Time"] = f"{elapsed:.6f}"
+
+        try:
+            role = getattr(request.state, "auth_role", "unknown")
+            logger.info(
+                "request request_id=%s method=%s path=%s status=%s latency_ms=%s auth_role=%s",
+                request_id,
+                request.method,
+                request.url.path,
+                response.status_code,
+                int(elapsed * 1000),
+                role,
+            )
+        except Exception:
+            pass
 
         return response
 
