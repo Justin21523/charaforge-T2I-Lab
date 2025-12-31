@@ -1,0 +1,40 @@
+name: ai_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - nodejs>=18
+  - fastapi>=0.104
+  - uvicorn>=0.24
+  - pydantic>=2.4
+  - pydantic-settings>=2.1
+  - python-dotenv>=1.0
+  - python-multipart>=0.0.6
+  - requests>=2.31
+  - aiofiles>=23.2
+  - psutil
+  - pyyaml>=6.0
+  - pillow>=10
+  - numpy>=1.24
+  - opencv
+  - celery>=5.3
+  - redis-py>=5.0
+  - pytest>=7.4
+  - pytest-asyncio>=0.21
+  - httpx>=0.25
+  - ruff>=0.1.6
+  - black>=23.11
+  - pip:
+      # PyTorch note:
+      # - This file installs CPU wheels by default so the app can run end-to-end.
+      # - For NVIDIA GPUs, reinstall torch/torchvision with the correct CUDA wheels
+      #   after creating the env (example for CUDA 12.1):
+      #     pip install --upgrade --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu121
+      - torch>=2.1.0
+      - torchvision>=0.16.0
+      - transformers>=4.36.0
+      - accelerate>=0.25.0
+      - diffusers>=0.24.0
+      - peft>=0.6.0
+      - safetensors>=0.4.0
