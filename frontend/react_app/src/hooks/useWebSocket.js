@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const DEFAULT_RECONNECT_DELAY_MS = 1500;
+const API_KEY = import.meta.env.VITE_API_KEY || "";
 
 const toWsUrl = (httpBaseUrl, path) => {
   const url = new URL(httpBaseUrl);
@@ -12,7 +13,13 @@ const toWsUrl = (httpBaseUrl, path) => {
 };
 
 export const buildTrainProgressWsUrl = (apiBaseUrl, jobId) =>
-  toWsUrl(apiBaseUrl, `/api/v1/ws/train/${jobId}`);
+  (() => {
+    const url = new URL(toWsUrl(apiBaseUrl, `/api/v1/ws/train/${jobId}`));
+    if (API_KEY) {
+      url.searchParams.set("api_key", API_KEY);
+    }
+    return url.toString();
+  })();
 
 export const useWebSocket = (
   url,

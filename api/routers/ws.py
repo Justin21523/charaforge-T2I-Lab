@@ -33,6 +33,20 @@ def _redis_url() -> str:
 
 @router.websocket("/train/{job_id}")
 async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
+    settings = get_settings()
+    if settings.api.api_key:
+        header_name = settings.api.key_header or "X-API-Key"
+        presented = (
+            websocket.headers.get(header_name)
+            or websocket.query_params.get("api_key")
+            or websocket.query_params.get("token")
+        )
+        if not presented or presented != settings.api.api_key:
+            await websocket.accept()
+            await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
+            await websocket.close(code=4401)
+            return
+
     await websocket.accept()
 
     try:

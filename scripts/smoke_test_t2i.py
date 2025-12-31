@@ -32,6 +32,9 @@ class T2ISmokeTest:
 
     def __init__(self, api_base_url: str = "http://localhost:8000"):
         self.api_base_url = api_base_url
+        api_key = os.getenv("API_KEY") or os.getenv("API_API_KEY") or ""
+        api_key_header = os.getenv("API_KEY_HEADER", "X-API-Key")
+        self.request_headers = {api_key_header: api_key} if api_key else {}
         self.test_results = {
             "config_system": False,
             "cache_system": False,
@@ -241,7 +244,9 @@ class T2ISmokeTest:
 
         try:
             base = self.api_base_url.rstrip("/")
-            response = requests.get(f"{base}/api/v1/health", timeout=10)
+            response = requests.get(
+                f"{base}/api/v1/health", timeout=10, headers=self.request_headers
+            )
 
             if response.status_code == 200:
                 health_data = response.json()
@@ -280,7 +285,10 @@ class T2ISmokeTest:
 
             base = self.api_base_url.rstrip("/")
             response = requests.post(
-                f"{base}/api/v1/t2i/generate", json=generation_request, timeout=60
+                f"{base}/api/v1/t2i/generate",
+                json=generation_request,
+                timeout=60,
+                headers=self.request_headers,
             )
 
             if response.status_code == 200:
@@ -309,12 +317,16 @@ class T2ISmokeTest:
         try:
             base = self.api_base_url.rstrip("/")
 
-            list_res = requests.get(f"{base}/api/v1/lora/list", timeout=10)
+            list_res = requests.get(
+                f"{base}/api/v1/lora/list", timeout=10, headers=self.request_headers
+            )
             if list_res.status_code != 200:
                 raise RuntimeError(f"LoRA list failed: HTTP {list_res.status_code}")
             assert isinstance(list_res.json(), list), "LoRA list should be a list"
 
-            status_res = requests.get(f"{base}/api/v1/lora/status", timeout=10)
+            status_res = requests.get(
+                f"{base}/api/v1/lora/status", timeout=10, headers=self.request_headers
+            )
             if status_res.status_code != 200:
                 raise RuntimeError(f"LoRA status failed: HTTP {status_res.status_code}")
             payload = status_res.json()
@@ -335,7 +347,7 @@ class T2ISmokeTest:
 
         try:
             base = self.api_base_url.rstrip("/")
-            response = requests.get(f"{base}/api/v1/models", timeout=10)
+            response = requests.get(f"{base}/api/v1/models", timeout=10, headers=self.request_headers)
 
             if response.status_code == 200:
                 status = response.json()
@@ -577,7 +589,12 @@ if __name__ == "__main__":
 def quick_api_test(api_url: str = "http://localhost:8000") -> bool:
     """快速 API 測試"""
     try:
-        response = requests.get(f"{api_url.rstrip('/')}/api/v1/health", timeout=5)
+        api_key = os.getenv("API_KEY") or os.getenv("API_API_KEY") or ""
+        api_key_header = os.getenv("API_KEY_HEADER", "X-API-Key")
+        headers = {api_key_header: api_key} if api_key else {}
+        response = requests.get(
+            f"{api_url.rstrip('/')}/api/v1/health", timeout=5, headers=headers
+        )
         return response.status_code == 200
     except Exception:
         return False

@@ -6,6 +6,13 @@ set -euo pipefail
 # Configuration
 API_URL=${API_URL:-"http://localhost:8000"}
 OUTPUT_DIR=${OUTPUT_DIR:-"test_outputs"}
+API_KEY=${API_KEY:-""}
+API_KEY_HEADER=${API_KEY_HEADER:-"X-API-Key"}
+
+CURL_AUTH_ARGS=()
+if [ -n "$API_KEY" ]; then
+    CURL_AUTH_ARGS=(-H "${API_KEY_HEADER}: ${API_KEY}")
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -40,10 +47,11 @@ test_endpoint() {
     log_info "Testing: $test_name"
 
     if [ "$method" = "GET" ]; then
-        response=$(curl -s -w "\n%{http_code}" "$API_URL$endpoint")
+        response=$(curl -s -w "\n%{http_code}" "${CURL_AUTH_ARGS[@]}" "$API_URL$endpoint")
     else
         response=$(curl -s -w "\n%{http_code}" -X "$method" \
             -H "Content-Type: application/json" \
+            "${CURL_AUTH_ARGS[@]}" \
             -d "$data" \
             "$API_URL$endpoint")
     fi

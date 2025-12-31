@@ -2,15 +2,25 @@
 import axios from "axios";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_KEY = import.meta.env.VITE_API_KEY || "";
+const API_KEY_HEADER = import.meta.env.VITE_API_KEY_HEADER || "X-API-Key";
 
 class APIService {
   constructor() {
+    this.apiKey = API_KEY;
+    this.apiKeyHeader = API_KEY_HEADER;
+
+    const defaultHeaders = {
+      "Content-Type": "application/json",
+    };
+    if (this.apiKey) {
+      defaultHeaders[this.apiKeyHeader] = this.apiKey;
+    }
+
     this.client = axios.create({
       baseURL: API_BASE_URL,
       timeout: 30000,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: defaultHeaders,
     });
 
     // Request interceptor
@@ -127,9 +137,16 @@ class APIService {
     formData.append("file", file);
     formData.append("file_type", fileType);
 
+    const uploadHeaders = {
+      "Content-Type": "multipart/form-data",
+    };
+    if (this.apiKey) {
+      uploadHeaders[this.apiKeyHeader] = this.apiKey;
+    }
+
     return await this.client.post("/api/v1/upload", formData, {
       headers: {
-        "Content-Type": "multipart/form-data",
+        ...uploadHeaders,
       },
     });
   }

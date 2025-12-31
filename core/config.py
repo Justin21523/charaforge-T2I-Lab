@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -217,8 +217,9 @@ class APIConfig(BaseSettings):
 
     # CORS and security
     cors_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000")
-    api_key: Optional[str] = Field(default=None)
-    rate_limit: int = Field(default=100, ge=1)  # requests per minute
+    api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("KEY", "API_KEY"))
+    key_header: str = Field(default="X-API-Key")
+    rate_limit: int = Field(default=100, ge=0)  # requests per minute (0 disables)
 
     # File uploads
     max_file_size_mb: int = Field(default=50, ge=1, le=500)

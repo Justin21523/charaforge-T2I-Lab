@@ -75,6 +75,12 @@ npm run dev
 - Datasets: `GET /api/v1/datasets/root`, `GET /api/v1/datasets/list`, `POST /api/v1/datasets/validate`
 - WebSocket: `ws://<host>/api/v1/ws/train/{job_id}`
 
+### Auth + Rate Limiting (Optional)
+
+- Set `API_KEY` (and optionally `API_KEY_HEADER`) in `.env` to require an API key for `/api/v1/*` (health/readiness/liveness stay open).
+- For browser WebSockets, pass `?api_key=...` (headers are not supported by the WebSocket API).
+- Set `API_RATE_LIMIT` to cap requests per minute (0 disables).
+
 ## Docker
 
 ```bash
@@ -87,4 +93,3 @@ docker compose -f docker/docker-compose.yml up --build
 pytest -q
 ruff check api core workers tests
 ```
-

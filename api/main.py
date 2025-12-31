@@ -8,6 +8,7 @@ API contract:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -17,6 +18,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from api.routers.health import router as health_router
+from api.security import RateLimiter, extract_api_key, get_client_key, is_exempt_v1_request
 from core.config import bootstrap_config, get_settings
 from core.exceptions import CharaForgeError
 
@@ -41,6 +43,14 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
+    )
+
+    app.state.rate_limiter = RateLimiter()
+    app.state.redis_url = (
+        os.getenv("REDIS_URL")
+        or os.getenv("CELERY_BROKER_URL")
+        or settings.redis_url
+        or settings.celery.broker_url
     )
 
     app.add_middleware(
@@ -89,6 +99,54 @@ def create_app() -> FastAPI:
         started = time.time()
         response = await call_next(request)
         response.headers["X-Process-Time"] = f"{time.time() - started:.6f}"
+        return response
+
+    @app.middleware("http")
+    async def auth_and_rate_limit(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith(API_V1_PREFIX) or is_exempt_v1_request(request):
+            return await call_next(request)
+
+        rate_limit = int(settings.api.rate_limit or 0)
+        rate_result = None
+        if rate_limit > 0:
+            key = get_client_key(request)
+            rate_result = app.state.rate_limiter.check(
+                key=key,
+                limit=rate_limit,
+                redis_url=app.state.redis_url,
+            )
+            if not rate_result.allowed:
+                retry_after = max(0, rate_result.reset_epoch - int(time.time()))
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": "Rate limit exceeded",
+                        "limit": rate_result.limit,
+                        "remaining": rate_result.remaining,
+                        "reset": rate_result.reset_epoch,
+                    },
+                    headers={
+                        "Retry-After": str(retry_after),
+                        "X-RateLimit-Limit": str(rate_result.limit),
+                        "X-RateLimit-Remaining": str(rate_result.remaining),
+                        "X-RateLimit-Reset": str(rate_result.reset_epoch),
+                    },
+                )
+
+        if settings.api.api_key:
+            header_name = settings.api.key_header or "X-API-Key"
+            presented = extract_api_key(request, header_name)
+            if not presented or presented != settings.api.api_key:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
+        response = await call_next(request)
+
+        if rate_result is not None:
+            response.headers["X-RateLimit-Limit"] = str(rate_result.limit)
+            response.headers["X-RateLimit-Remaining"] = str(rate_result.remaining)
+            response.headers["X-RateLimit-Reset"] = str(rate_result.reset_epoch)
+
         return response
 
     @app.exception_handler(CharaForgeError)
