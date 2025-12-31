@@ -69,12 +69,18 @@ class APIService {
       },
       (error) => {
         console.error("API Error:", error);
+        const data = error.response?.data || {};
+        const requestId =
+          data?.request_id || error.response?.headers?.["x-request-id"] || "";
+
         const message =
-          error.response?.data?.message ||
-          error.response?.data?.detail ||
+          (typeof data?.message === "string" && data.message) ||
+          (typeof data?.detail === "string" && data.detail) ||
           error.message ||
           "Unknown error";
-        return Promise.reject(new Error(message));
+
+        const withRequestId = requestId ? `${message} (request_id=${requestId})` : message;
+        return Promise.reject(new Error(withRequestId));
       }
     );
   }
