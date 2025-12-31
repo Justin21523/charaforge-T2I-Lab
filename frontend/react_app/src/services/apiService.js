@@ -1,8 +1,7 @@
 // frontend/react_app/src/services/apiService.js
 import axios from "axios";
 
-const API_BASE_URL =
-  process.env.REACT_APP_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 class APIService {
   constructor() {
@@ -35,7 +34,10 @@ class APIService {
       (error) => {
         console.error("API Error:", error);
         const message =
-          error.response?.data?.message || error.message || "Unknown error";
+          error.response?.data?.message ||
+          error.response?.data?.detail ||
+          error.message ||
+          "Unknown error";
         return Promise.reject(new Error(message));
       }
     );
@@ -95,6 +97,17 @@ class APIService {
     return await this.client.post(`/api/v1/batch/cancel/${jobId}`);
   }
 
+  async listJobs(limit = 50) {
+    return await this.client.get(`/api/v1/batch/list?limit=${limit}`);
+  }
+
+  async downloadJobResults(jobId) {
+    const response = await this.client.get(`/api/v1/batch/download/${jobId}`, {
+      responseType: "blob",
+    });
+    return response;
+  }
+
   // Training
   async submitTrainingJob(config) {
     return await this.client.post("/api/v1/finetune/lora/train", config);
@@ -102,6 +115,10 @@ class APIService {
 
   async getTrainingStatus(runId) {
     return await this.client.get(`/api/v1/finetune/lora/status/${runId}`);
+  }
+
+  async cancelTraining(runId) {
+    return await this.client.post(`/api/v1/finetune/lora/cancel/${runId}`);
   }
 
   // File upload

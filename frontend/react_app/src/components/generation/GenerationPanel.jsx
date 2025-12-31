@@ -12,7 +12,7 @@ import toast from 'react-hot-toast';
 import '../../styles/components/Generation.css';
 
 const GenerationPanel = () => {
-  const { apiCall, isLoading } = useAPI();
+  const { apiCall, apiService, isLoading } = useAPI();
   const [params, setParams] = useLocalStorage('generation-params', DEFAULT_GENERATION_PARAMS);
   const [controlnetParams, setControlnetParams] = useState({
     enabled: false,
@@ -43,20 +43,26 @@ const GenerationPanel = () => {
       const generationParams = { ...params };
 
       let result;
-      if (controlnetParams.enabled && controlnetParams.image) {
-        const controlParams = {
-          control_type: controlnetParams.type,
+      if (controlnetParams.enabled) {
+        if (!controlnetParams.image) {
+          toast.error('請先上傳 ControlNet 控制圖片');
+          return;
+        }
+
+        const payload = {
+          ...generationParams,
           control_image: controlnetParams.image,
-          control_weight: controlnetParams.weight,
+          weight: controlnetParams.weight,
+          preprocess: true,
         };
 
         result = await apiCall(
-          () => apiService.controlnetGenerate({ ...generationParams, ...controlParams }, controlnetParams.type),
+          () => apiService.controlnetGenerate(payload, controlnetParams.type),
           null,
           {
-            showLoading: false,
+            showLoading: true,
             showSuccess: true,
-            successMessage: '圖片生成完成！'
+            successMessage: 'ControlNet 生成完成！'
           }
         );
       } else {
@@ -64,7 +70,7 @@ const GenerationPanel = () => {
           () => apiService.generateImage(generationParams),
           null,
           {
-            showLoading: false,
+            showLoading: true,
             showSuccess: true,
             successMessage: '圖片生成完成！'
           }
@@ -79,6 +85,9 @@ const GenerationPanel = () => {
           path: path,
           metadata: {
             ...params,
+            controlnet: controlnetParams.enabled
+              ? { type: controlnetParams.type, weight: controlnetParams.weight }
+              : null,
             seed: result.seed || params.seed,
             elapsed_ms: result.elapsed_ms,
             generated_at: new Date().toISOString(),

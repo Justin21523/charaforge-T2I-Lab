@@ -10,7 +10,7 @@ import toast from 'react-hot-toast';
 import '../../styles/components/Batch.css';
 
 const BatchProcessor = () => {
-  const { apiCall, isLoading } = useAPI();
+  const { apiCall, apiService, isLoading } = useAPI();
   const [activeTab, setActiveTab] = useState('csv');
   const [jobs, setJobs] = useState([]);
   const [selectedJob, setSelectedJob] = useState(null);
@@ -30,19 +30,72 @@ const BatchProcessor = () => {
     if (!file) return;
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('file_type', 'csv');
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (lines.length === 0) {
+        toast.error('CSV 檔案內容為空');
+        return;
+      }
 
-      const result = await apiCall(
-        () => apiService.submitBatchJob({ file: formData, type: 'csv' }),
-        null,
-        {
-          showLoading: true,
-          showSuccess: true,
-          successMessage: 'CSV 批次任務提交成功'
+      const first = lines[0].toLowerCase();
+      const hasHeader = first.includes('prompt');
+
+      let tasks = [];
+      if (hasHeader) {
+        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const col = (name) => headers.indexOf(name);
+        const idxPrompt = col('prompt');
+        if (idxPrompt === -1) {
+          toast.error('CSV 需要包含 prompt 欄位');
+          return;
         }
-      );
+
+        for (const row of lines.slice(1)) {
+          const cols = row.split(',').map(c => c.trim());
+          const prompt = cols[idxPrompt] || '';
+          if (!prompt) continue;
+
+          tasks.push({
+            prompt,
+            negative: cols[col('negative')] || batchParams.negative,
+            width: parseInt(cols[col('width')]) || batchParams.width,
+            height: parseInt(cols[col('height')]) || batchParams.height,
+            steps: parseInt(cols[col('steps')]) || batchParams.steps,
+            cfg_scale: parseFloat(cols[col('cfg_scale')]) || batchParams.cfg_scale,
+            sampler: cols[col('sampler')] || batchParams.sampler,
+            seed: parseInt(cols[col('seed')]) || -1,
+            batch_size: parseInt(cols[col('batch_size')]) || 1,
+          });
+        }
+      } else {
+        tasks = lines.map((prompt) => ({
+          prompt,
+          negative: batchParams.negative,
+          width: batchParams.width,
+          height: batchParams.height,
+          steps: batchParams.steps,
+          cfg_scale: batchParams.cfg_scale,
+          sampler: batchParams.sampler,
+          seed: -1,
+          batch_size: 1,
+        }));
+      }
+
+      if (tasks.length === 0) {
+        toast.error('沒有可提交的任務');
+        return;
+      }
+
+      const jobData = {
+        job_name: `csv_${file.name}_${Date.now()}`,
+        tasks,
+      };
+
+      const result = await apiCall(() => apiService.submitBatchJob(jobData), null, {
+        showLoading: true,
+        showSuccess: true,
+        successMessage: `CSV 批次任務提交成功 (${tasks.length} 個任務)`,
+      });
 
       if (result.job_id) {
         refreshJobs();
@@ -51,7 +104,7 @@ const BatchProcessor = () => {
     } catch (error) {
       console.error('CSV upload failed:', error);
     }
-  }, [apiCall]);
+  }, [apiCall, apiService, batchParams]);
 
   const onJsonDrop = useCallback(async (acceptedFiles) => {
     const file = acceptedFiles[0];
@@ -79,7 +132,7 @@ const BatchProcessor = () => {
       toast.error('JSON 格式錯誤或提交失敗');
       console.error('JSON upload failed:', error);
     }
-  }, [apiCall]);
+  }, [apiCall, apiService]);
 
   const {
     getRootProps: getCsvRootProps,
@@ -113,7 +166,7 @@ const BatchProcessor = () => {
     } catch (error) {
       console.error('Failed to refresh jobs:', error);
     }
-  }, [apiCall]);
+  }, [apiCall, apiService]);
 
   useEffect(() => {
     refreshJobs();

@@ -9,13 +9,9 @@ export const useAPI = () => {
 
   const checkHealth = useCallback(async () => {
     try {
-      const connected = health.status === "ok";
+      const health = await apiService.healthCheck();
+      const connected = ["ok", "degraded", "healthy"].includes(health?.status);
       setIsConnected(connected);
-
-      if (!connected) {
-        console.warn("API health check failed:", health.message);
-      }
-
       return connected;
     } catch (error) {
       setIsConnected(false);
@@ -58,11 +54,6 @@ export const useAPI = () => {
 
   useEffect(() => {
     checkHealth();
-
-    // Check health every 30 seconds
-    const interval = setInterval(checkHealth, 30000);
-
-    return () => clearInterval(interval);
   }, [checkHealth]);
 
   return {

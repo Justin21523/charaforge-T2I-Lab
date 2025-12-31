@@ -9,7 +9,6 @@
   display: grid;
   grid-template-columns: 400px 1fr;
   gap: var(--spacing-lg);
-  height: calc(100vh - 180px);
 }
 
 .training-controls {
@@ -17,7 +16,6 @@
   border-radius: var(--border-radius-lg);
   padding: var(--spacing-lg);
   border: 1px solid var(--color-gray-200);
-  overflow-y: auto;
 }
 
 .training-monitor-panel {
@@ -25,7 +23,6 @@
   border-radius: var(--border-radius-lg);
   padding: var(--spacing-lg);
   border: 1px solid var(--color-gray-200);
-  overflow-y: auto;
 }
 
 .preset-selector {
@@ -180,5 +177,16 @@
 
   .metrics-grid {
     grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .training-content {
+    gap: var(--spacing-md);
+  }
+
+  .training-controls,
+  .training-monitor-panel {
+    padding: var(--spacing-md);
   }
 }

@@ -6,7 +6,7 @@ import { formatDuration } from '../../utils/helpers';
 import Loading from '../common/Loading';
 
 const JobStatus = ({ jobId, onRefresh }) => {
-  const { apiCall } = useAPI();
+  const { apiCall, apiService } = useAPI();
   const [jobDetails, setJobDetails] = useState(null);
   const [results, setResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -150,7 +150,7 @@ const JobStatus = ({ jobId, onRefresh }) => {
                 <div key={index} className="result-item">
                   {result.image_path && (
                     <img
-                      src={result.image_path}
+                      src={Array.isArray(result.image_path) ? result.image_path[0] : result.image_path}
                       alt={`Result ${index + 1}`}
                       className="result-image"
                       loading="lazy"

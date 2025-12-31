@@ -9,7 +9,6 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--spacing-lg);
-  height: calc(100vh - 180px);
 }
 
 .batch-section {
@@ -17,7 +16,6 @@
   border-radius: var(--border-radius-lg);
   padding: var(--spacing-lg);
   border: 1px solid var(--color-gray-200);
-  overflow-y: auto;
 }
 
 .batch-tabs {
@@ -192,5 +190,19 @@
 
   .results-gallery {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .batch-content {
+    gap: var(--spacing-md);
+  }
+
+  .batch-section {
+    padding: var(--spacing-md);
+  }
+
+  .tab-buttons {
+    flex-wrap: wrap;
   }
 }

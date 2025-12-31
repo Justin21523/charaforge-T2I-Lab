@@ -13,12 +13,12 @@ const Header = () => {
       <div className="header-left">
         <Link to="/" className="logo">
           <Palette className="logo-icon" />
-          <span className="logo-text">SagaForge T2I Lab</span>
+          <span className="logo-text">CharaForge T2I Lab</span>
         </Link>
       </div>
 
       <div className="header-center">
-        <h1 className="page-title">專業動畫角色生成平台</h1>
+        <h1 className="page-title">角色生成與 LoRA 訓練工作台</h1>
       </div>
 
       <div className="header-right">

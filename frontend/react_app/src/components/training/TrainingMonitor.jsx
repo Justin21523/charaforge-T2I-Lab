@@ -1,209 +1,306 @@
 // frontend/react_app/src/components/training/TrainingMonitor.jsx
-import React, { useState, useCallback, useEffect } from 'react';
-import { Brain, Play, Pause, Download, TrendingUp } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { useAPI } from '../../hooks/useAPI';
-import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { LORA_TRAINING_PRESETS } from '../../utils/constants';
-import { formatDuration } from '../../utils/helpers';
-import Loading from '../common/Loading';
-import toast from 'react-hot-toast';
-import '../../styles/components/Training.css';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Brain, Play, RefreshCw, XCircle } from "lucide-react";
+import { useAPI } from "../../hooks/useAPI";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { buildTrainProgressWsUrl, useWebSocket } from "../../hooks/useWebSocket";
+import { LORA_TRAINING_PRESETS } from "../../utils/constants";
+import Loading from "../common/Loading";
+import toast from "react-hot-toast";
+import "../../styles/components/Training.css";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
+const defaultConfig = {
+  project_name: "",
+  dataset_path: "",
+  instance_prompt: "",
+  model_type: "sdxl",
+  base_model: "",
+  lora_rank: 16,
+  lora_alpha: 32,
+  lora_dropout: 0.1,
+  learning_rate: 1e-4,
+  train_batch_size: 1,
+  gradient_accumulation_steps: 8,
+  mixed_precision: "fp16",
+  resolution: 768,
+  max_train_steps: 2000,
+  num_train_epochs: 10,
+  save_steps: 500,
+  validation_steps: 100,
+};
 
 const TrainingMonitor = () => {
-  const { apiCall, isLoading } = useAPI();
-  const [selectedPreset, setSelectedPreset] = useState('character');
-  const [trainingJobs, setTrainingJobs] = useState([]);
-  const [selectedJob, setSelectedJob] = useState(null);
-  const [jobDetails, setJobDetails] = useState(null);
-  const [trainingConfig, setTrainingConfig] = useLocalStorage('training-config', {
-    run_id: '',
-    dataset_name: '',
-    ...LORA_TRAINING_PRESETS.character
+  const { apiCall, apiService, isLoading } = useAPI();
+
+  const [selectedPreset, setSelectedPreset] = useState("character");
+  const [trainingConfig, setTrainingConfig] = useLocalStorage(
+    "training-config",
+    defaultConfig
+  );
+
+  const [jobs, setJobs] = useLocalStorage("training-jobs", []);
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null);
+
+  const presetKeys = useMemo(() => Object.keys(LORA_TRAINING_PRESETS), []);
+
+  const applyPreset = useCallback(
+    (presetName) => {
+      const preset = LORA_TRAINING_PRESETS[presetName];
+      if (!preset) return;
+
+      setSelectedPreset(presetName);
+      setTrainingConfig((prev) => ({
+        ...prev,
+        lora_rank: preset.rank,
+        lora_alpha: preset.rank * 2,
+        learning_rate: preset.learning_rate,
+        resolution: preset.resolution,
+        train_batch_size: preset.batch_size,
+        gradient_accumulation_steps: preset.gradient_accumulation_steps,
+        max_train_steps: preset.max_train_steps,
+      }));
+    },
+    [setTrainingConfig]
+  );
+
+  useEffect(() => {
+    if (!trainingConfig.project_name) {
+      applyPreset(selectedPreset);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const refreshStatus = useCallback(
+    async (jobId) => {
+      if (!jobId) return;
+      try {
+        const status = await apiCall(
+          () => apiService.getTrainingStatus(jobId),
+          null,
+          { showLoading: false, showError: false }
+        );
+        setJobStatus(status);
+      } catch (error) {
+        console.error("Failed to fetch training status:", error);
+      }
+    },
+    [apiCall, apiService]
+  );
+
+  const wsUrl = useMemo(
+    () => (selectedJobId ? buildTrainProgressWsUrl(API_BASE_URL, selectedJobId) : null),
+    [selectedJobId]
+  );
+  const { status: wsStatus, lastMessage: wsMessage } = useWebSocket(wsUrl, {
+    enabled: Boolean(selectedJobId),
+    reconnect: true,
   });
 
-  // Fetch training jobs
-  const refreshJobs = useCallback(async () => {
-    try {
-      const jobs = await apiCall(
-        () => apiService.listTrainingJobs(),
-        null,
-        { showLoading: false, showError: false }
-      );
-      setTrainingJobs(jobs || []);
-    } catch (error) {
-      console.error('Failed to refresh training jobs:', error);
+  useEffect(() => {
+    if (!selectedJobId || !wsMessage) return;
+    if (wsMessage.topic === "ws.subscribed") return;
+    if (wsMessage.job_id && wsMessage.job_id !== selectedJobId) return;
+
+    const state = wsMessage.state;
+    const progressPayload = wsMessage.progress || null;
+    if (!state) return;
+
+    if (state === "PROGRESS") {
+      setJobStatus({ job_id: selectedJobId, status: "PROGRESS", progress: progressPayload });
+      return;
     }
-  }, [apiCall]);
+    if (state === "SUCCESS") {
+      setJobStatus({
+        job_id: selectedJobId,
+        status: "SUCCESS",
+        progress: progressPayload,
+        result: progressPayload,
+      });
+      return;
+    }
+    if (state === "FAILURE") {
+      setJobStatus({
+        job_id: selectedJobId,
+        status: "FAILURE",
+        progress: progressPayload,
+        error: progressPayload?.error || progressPayload?.message || "Training failed",
+      });
+    }
+  }, [selectedJobId, wsMessage]);
 
   useEffect(() => {
-    refreshJobs();
-    const interval = setInterval(refreshJobs, 10000); // Refresh every 10 seconds
+    if (!selectedJobId) return;
+    refreshStatus(selectedJobId);
+    if (wsStatus === "connected") return;
+    const interval = setInterval(() => refreshStatus(selectedJobId), 5000);
     return () => clearInterval(interval);
-  }, [refreshJobs]);
+  }, [selectedJobId, refreshStatus, wsStatus]);
 
-  // Fetch job details when selection changes
-  useEffect(() => {
-    if (selectedJob) {
-      fetchJobDetails(selectedJob);
-      const interval = setInterval(() => fetchJobDetails(selectedJob), 5000);
-      return () => clearInterval(interval);
+  const updateConfig = useCallback(
+    (key, value) => setTrainingConfig((prev) => ({ ...prev, [key]: value })),
+    [setTrainingConfig]
+  );
+
+  const submitTraining = useCallback(async () => {
+    if (!trainingConfig.project_name.trim()) {
+      toast.error("請填寫專案名稱");
+      return;
     }
-  }, [selectedJob]);
-
-  const fetchJobDetails = useCallback(async (runId) => {
-    try {
-      const details = await apiCall(
-        () => apiService.getTrainingStatus(runId),
-        null,
-        { showLoading: false, showError: false }
-      );
-      setJobDetails(details);
-    } catch (error) {
-      console.error('Failed to fetch job details:', error);
+    if (!trainingConfig.dataset_path.trim()) {
+      toast.error("請填寫資料集路徑（或資料夾名稱）");
+      return;
     }
-  }, [apiCall]);
-
-  const handlePresetChange = useCallback((presetName) => {
-    setSelectedPreset(presetName);
-    const preset = LORA_TRAINING_PRESETS[presetName];
-    setTrainingConfig(prev => ({
-      ...prev,
-      ...preset,
-      run_id: prev.run_id,
-      dataset_name: prev.dataset_name
-    }));
-  }, [setTrainingConfig]);
-
-  const submitTrainingJob = useCallback(async () => {
-    if (!trainingConfig.run_id.trim() || !trainingConfig.dataset_name.trim()) {
-      toast.error('請填寫任務 ID 和數據集名稱');
+    if (!trainingConfig.instance_prompt.trim()) {
+      toast.error("請填寫 instance prompt");
       return;
     }
 
     try {
-      const result = await apiCall(
-        () => apiService.submitTrainingJob(trainingConfig),
-        null,
-        {
-          showLoading: true,
-          showSuccess: true,
-          successMessage: '訓練任務提交成功'
-        }
-      );
+      const payload = {
+        ...trainingConfig,
+        base_model: trainingConfig.base_model?.trim() || null,
+      };
 
-      if (result.run_id || result.job_id) {
-        const jobId = result.run_id || result.job_id;
-        setSelectedJob(jobId);
-        refreshJobs();
+      const result = await apiCall(() => apiService.submitTrainingJob(payload), null, {
+        showLoading: true,
+        showSuccess: true,
+        successMessage: "訓練任務提交成功",
+      });
 
-        // Generate new run_id for next job
-        setTrainingConfig(prev => ({
-          ...prev,
-          run_id: `lora_train_${Date.now()}`
-        }));
+      if (result?.job_id) {
+        const job = {
+          job_id: result.job_id,
+          project_name: trainingConfig.project_name,
+          submitted_at: result.submitted_at || new Date().toISOString(),
+        };
+        setJobs((prev) => [job, ...prev]);
+        setSelectedJobId(result.job_id);
+        setJobStatus(null);
       }
     } catch (error) {
-      console.error('Training submission failed:', error);
+      console.error("Training submission failed:", error);
     }
-  }, [trainingConfig, apiCall, setTrainingConfig]);
+  }, [apiCall, apiService, setJobs, trainingConfig]);
 
-  const cancelTraining = useCallback(async (runId) => {
-    try {
-      await apiCall(
-        () => apiService.cancelTraining(runId),
-        null,
-        {
-          showSuccess: true,
-          successMessage: '訓練任務已取消'
-        }
-      );
-      refreshJobs();
-    } catch (error) {
-      console.error('Failed to cancel training:', error);
-    }
-  }, [apiCall]);
-
-  const downloadModel = useCallback(async (runId) => {
-    try {
-      const blob = await apiCall(
-        () => apiService.exportLora(runId),
-        null,
-        {
+  const cancelTraining = useCallback(
+    async (jobId) => {
+      if (!jobId) return;
+      try {
+        await apiCall(() => apiService.cancelTraining(jobId), null, {
           showLoading: true,
           showSuccess: true,
-          successMessage: '模型下載完成'
-        }
-      );
+          successMessage: "已送出取消請求",
+        });
+        refreshStatus(jobId);
+      } catch (error) {
+        console.error("Cancel training failed:", error);
+      }
+    },
+    [apiCall, apiService, refreshStatus]
+  );
 
-      downloadBlob(blob, `lora_${runId}.safetensors`);
-    } catch (error) {
-      console.error('Failed to download model:', error);
-    }
-  }, [apiCall]);
-
-  const updateConfig = useCallback((key, value) => {
-    setTrainingConfig(prev => ({ ...prev, [key]: value }));
-  }, [setTrainingConfig]);
+  const progress = jobStatus?.progress || null;
+  const percent =
+    typeof progress?.percent === "number" ? Math.round(progress.percent) : null;
 
   return (
     <div className="training-monitor">
       <div className="panel-header">
         <h2 className="panel-title">
           <Brain className="title-icon" />
-          LoRA 訓練監控
+          LoRA 訓練
         </h2>
         <button
           className="btn btn-secondary"
-          onClick={refreshJobs}
+          onClick={() => refreshStatus(selectedJobId)}
+          disabled={!selectedJobId}
         >
-          <TrendingUp size={16} />
-          刷新任務
+          <RefreshCw size={16} />
+          刷新狀態
         </button>
       </div>
 
       <div className="training-content">
         <div className="training-controls">
-          <h3 className="section-title">提交訓練任務</h3>
-
           <div className="preset-selector">
-            {Object.entries(LORA_TRAINING_PRESETS).map(([key, preset]) => (
-              <button
-                key={key}
-                className={`preset-button ${selectedPreset === key ? 'active' : ''}`}
-                onClick={() => handlePresetChange(key)}
-              >
-                <div className="preset-title">
-                  {key === 'character' ? '角色訓練' : '風格訓練'}
-                </div>
-                <div className="preset-description">
-                  Rank {preset.rank}, {preset.max_train_steps} 步
-                </div>
-              </button>
-            ))}
+            {presetKeys.map((key) => {
+              const preset = LORA_TRAINING_PRESETS[key];
+              return (
+                <button
+                  key={key}
+                  className={`preset-button ${selectedPreset === key ? "active" : ""}`}
+                  onClick={() => applyPreset(key)}
+                  type="button"
+                >
+                  <div className="preset-title">{key}</div>
+                  <div className="preset-description">
+                    Rank {preset.rank}, {preset.max_train_steps} steps
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
           <div className="training-form">
             <div className="form-group">
-              <label>任務 ID</label>
+              <label>專案名稱</label>
               <input
                 type="text"
-                value={trainingConfig.run_id}
-                onChange={(e) => updateConfig('run_id', e.target.value)}
+                value={trainingConfig.project_name}
+                onChange={(e) => updateConfig("project_name", e.target.value)}
                 placeholder="例如: char_alice_v1"
                 className="input"
               />
             </div>
 
             <div className="form-group">
-              <label>數據集名稱</label>
+              <label>資料集路徑 / 名稱</label>
               <input
                 type="text"
-                value={trainingConfig.dataset_name}
-                onChange={(e) => updateConfig('dataset_name', e.target.value)}
-                placeholder="數據集目錄名稱"
+                value={trainingConfig.dataset_path}
+                onChange={(e) => updateConfig("dataset_path", e.target.value)}
+                placeholder="例如: /mnt/data/datasets/charaforge-t2i-lab/myset 或 myset"
                 className="input"
               />
+            </div>
+
+            <div className="form-group">
+              <label>Instance Prompt</label>
+              <input
+                type="text"
+                value={trainingConfig.instance_prompt}
+                onChange={(e) => updateConfig("instance_prompt", e.target.value)}
+                placeholder="例如: a photo of <alice> person"
+                className="input"
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label>模型類型</label>
+                <select
+                  className="select"
+                  value={trainingConfig.model_type}
+                  onChange={(e) => updateConfig("model_type", e.target.value)}
+                >
+                  <option value="sdxl">SDXL</option>
+                  <option value="sd15">SD1.5</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Base Model（可選）</label>
+                <input
+                  type="text"
+                  value={trainingConfig.base_model}
+                  onChange={(e) => updateConfig("base_model", e.target.value)}
+                  placeholder="留空使用預設"
+                  className="input"
+                />
+              </div>
             </div>
 
             <div className="form-row">
@@ -214,11 +311,13 @@ const TrainingMonitor = () => {
                   min="4"
                   max="128"
                   step="4"
-                  value={trainingConfig.rank}
-                  onChange={(e) => updateConfig('rank', parseInt(e.target.value))}
+                  value={trainingConfig.lora_rank}
+                  onChange={(e) =>
+                    updateConfig("lora_rank", parseInt(e.target.value, 10))
+                  }
                   className="slider"
                 />
-                <span className="slider-value">{trainingConfig.rank}</span>
+                <span className="slider-value">{trainingConfig.lora_rank}</span>
               </div>
 
               <div className="form-group">
@@ -226,7 +325,9 @@ const TrainingMonitor = () => {
                 <input
                   type="number"
                   value={trainingConfig.learning_rate}
-                  onChange={(e) => updateConfig('learning_rate', parseFloat(e.target.value))}
+                  onChange={(e) =>
+                    updateConfig("learning_rate", parseFloat(e.target.value))
+                  }
                   step="0.000001"
                   min="0.000001"
                   max="0.01"
@@ -244,7 +345,9 @@ const TrainingMonitor = () => {
                   max="1024"
                   step="64"
                   value={trainingConfig.resolution}
-                  onChange={(e) => updateConfig('resolution', parseInt(e.target.value))}
+                  onChange={(e) =>
+                    updateConfig("resolution", parseInt(e.target.value, 10))
+                  }
                   className="slider"
                 />
                 <span className="slider-value">{trainingConfig.resolution}px</span>
@@ -256,11 +359,13 @@ const TrainingMonitor = () => {
                   type="range"
                   min="1"
                   max="8"
-                  value={trainingConfig.batch_size}
-                  onChange={(e) => updateConfig('batch_size', parseInt(e.target.value))}
+                  value={trainingConfig.train_batch_size}
+                  onChange={(e) =>
+                    updateConfig("train_batch_size", parseInt(e.target.value, 10))
+                  }
                   className="slider"
                 />
-                <span className="slider-value">{trainingConfig.batch_size}</span>
+                <span className="slider-value">{trainingConfig.train_batch_size}</span>
               </div>
             </div>
 
@@ -269,11 +374,13 @@ const TrainingMonitor = () => {
                 <label>最大步數</label>
                 <input
                   type="range"
-                  min="500"
+                  min="200"
                   max="10000"
                   step="100"
                   value={trainingConfig.max_train_steps}
-                  onChange={(e) => updateConfig('max_train_steps', parseInt(e.target.value))}
+                  onChange={(e) =>
+                    updateConfig("max_train_steps", parseInt(e.target.value, 10))
+                  }
                   className="slider"
                 />
                 <span className="slider-value">{trainingConfig.max_train_steps}</span>
@@ -286,21 +393,27 @@ const TrainingMonitor = () => {
                   min="1"
                   max="16"
                   value={trainingConfig.gradient_accumulation_steps}
-                  onChange={(e) => updateConfig('gradient_accumulation_steps', parseInt(e.target.value))}
+                  onChange={(e) =>
+                    updateConfig(
+                      "gradient_accumulation_steps",
+                      parseInt(e.target.value, 10)
+                    )
+                  }
                   className="slider"
                 />
-                <span className="slider-value">{trainingConfig.gradient_accumulation_steps}</span>
+                <span className="slider-value">
+                  {trainingConfig.gradient_accumulation_steps}
+                </span>
               </div>
             </div>
 
             <button
               className="btn btn-primary btn-lg"
-              onClick={submitTrainingJob}
+              onClick={submitTraining}
               disabled={isLoading}
+              type="button"
             >
-              {isLoading ? (
-                <Loading size="small" text="提交中..." />
-              ) : (
+              {isLoading ? <Loading size="small" text="提交中..." /> : (
                 <>
                   <Play size={16} />
                   開始訓練
@@ -310,164 +423,85 @@ const TrainingMonitor = () => {
           </div>
 
           <div className="training-jobs">
-            <h4>訓練任務列表</h4>
-            {trainingJobs.length === 0 ? (
-              <div className="empty-state">
-                <Brain className="empty-icon" />
-                <p>沒有訓練任務</p>
+            {jobs.length === 0 ? (
+              <div className="training-job-item">
+                <div className="job-name">尚無訓練任務</div>
+                <div className="job-progress">提交後會在此顯示</div>
               </div>
             ) : (
-              <div className="job-list">
-                {trainingJobs.map((job) => (
-                  <div
-                    key={job.run_id}
-                    className={`training-job-item ${selectedJob === job.run_id ? 'selected' : ''}`}
-                    onClick={() => setSelectedJob(job.run_id)}
-                  >
-                    <div className="job-header">
-                      <h5 className="job-name">{job.run_id}</h5>
-                      <span className={`job-status ${job.status}`}>
-                        {job.status}
-                      </span>
-                    </div>
-                    <div className="job-progress">
-                      {job.current_step || 0} / {job.max_steps || 0} 步
-                    </div>
+              jobs.map((job) => (
+                <div
+                  key={job.job_id}
+                  className={`training-job-item ${selectedJobId === job.job_id ? "selected" : ""}`}
+                  onClick={() => setSelectedJobId(job.job_id)}
+                >
+                  <div className="job-header">
+                    <p className="job-name">{job.project_name}</p>
+                    <span className="job-progress">{job.job_id}</span>
                   </div>
-                ))}
-              </div>
+                  <div className="job-progress">{job.submitted_at}</div>
+                </div>
+              ))
             )}
           </div>
         </div>
 
         <div className="training-monitor-panel">
-          <h3 className="section-title">訓練監控</h3>
-
-          {!selectedJob ? (
+          {!selectedJobId ? (
             <div className="empty-state">
-              <TrendingUp className="empty-icon" />
-              <p>選擇訓練任務查看詳情</p>
+              <Brain className="empty-icon" />
+              <p>選擇任務以查看詳細狀態</p>
             </div>
-          ) : !jobDetails ? (
-            <Loading size="medium" text="載入訓練詳情..." />
+          ) : !jobStatus ? (
+            <Loading size="medium" text="載入任務狀態..." />
           ) : (
-            <div className="job-details">
-              <div className="job-info">
-                <h4>任務: {jobDetails.run_id}</h4>
-                <div className="metrics-grid">
-                  <div className="metric-card">
-                    <div className="metric-value">{jobDetails.status}</div>
-                    <div className="metric-label">狀態</div>
-                  </div>
-
-                  <div className="metric-card">
-                    <div className="metric-value">
-                      {jobDetails.current_step || 0}
-                    </div>
-                    <div className="metric-label">當前步數</div>
-                  </div>
-
-                  <div className="metric-card">
-                    <div className="metric-value">
-                      {jobDetails.loss ? jobDetails.loss.toFixed(4) : 'N/A'}
-                    </div>
-                    <div className="metric-label">當前損失</div>
-                  </div>
-
-                  <div className="metric-card">
-                    <div className="metric-value">
-                      {jobDetails.elapsed_time ? formatDuration(jobDetails.elapsed_time) : 'N/A'}
-                    </div>
-                    <div className="metric-label">運行時間</div>
-                  </div>
+            <>
+              <div className="metrics-grid">
+                <div className="metric-card">
+                  <p className="metric-value">{jobStatus.status || "UNKNOWN"}</p>
+                  <p className="metric-label">狀態</p>
                 </div>
-
-                {jobDetails.progress && (
-                  <div className="progress-section">
-                    <div className="progress-bar-large">
-                      <div
-                        className="progress-fill"
-                        style={{
-                          width: `${(jobDetails.current_step / jobDetails.max_steps) * 100}%`
-                        }}
-                      />
-                    </div>
-                    <div className="progress-text">
-                      {Math.round((jobDetails.current_step / jobDetails.max_steps) * 100)}% 完成
-                    </div>
-                  </div>
-                )}
+                <div className="metric-card">
+                  <p className="metric-value">{percent ?? "--"}%</p>
+                  <p className="metric-label">進度</p>
+                </div>
+                <div className="metric-card">
+                  <p className="metric-value">{progress?.step ?? "--"}</p>
+                  <p className="metric-label">Step</p>
+                </div>
+                <div className="metric-card">
+                  <p className="metric-value">{progress?.lr ? Number(progress.lr).toExponential(2) : "--"}</p>
+                  <p className="metric-label">LR</p>
+                </div>
               </div>
 
-              {jobDetails.loss_history && jobDetails.loss_history.length > 0 && (
-                <div className="metrics-chart">
-                  <h4>損失曲線</h4>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={jobDetails.loss_history.map((loss, index) => ({ step: index, loss }))}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="step" />
-                      <YAxis />
-                      <Tooltip formatter={(value) => [value.toFixed(4), '損失']} />
-                      <Line
-                        type="monotone"
-                        dataKey="loss"
-                        stroke="#3b82f6"
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+              {progress?.message && (
+                <div className="alert alert-info">{progress.message}</div>
+              )}
+
+              {jobStatus.error && (
+                <div className="alert alert-danger">
+                  <XCircle size={16} /> {jobStatus.error}
                 </div>
               )}
 
-              {jobDetails.sample_images && jobDetails.sample_images.length > 0 && (
-                <div className="sample-images">
-                  <h4>訓練樣本</h4>
-                  <div className="sample-gallery">
-                    {jobDetails.sample_images.map((image, index) => (
-                      <img
-                        key={index}
-                        src={image.url || image}
-                        alt={`Sample ${index + 1}`}
-                        className="sample-image"
-                        loading="lazy"
-                      />
-                    ))}
-                  </div>
+              {jobStatus.result?.model_id && (
+                <div className="alert alert-success">
+                  LoRA 已輸出：{jobStatus.result.model_id}
                 </div>
               )}
 
-              <div className="job-actions">
-                {jobDetails.status === 'running' && (
-                  <button
-                    className="btn btn-danger"
-                    onClick={() => cancelTraining(jobDetails.run_id)}
-                  >
-                    <Pause size={16} />
-                    停止訓練
-                  </button>
-                )}
-
-                {jobDetails.status === 'completed' && (
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => downloadModel(jobDetails.run_id)}
-                  >
-                    <Download size={16} />
-                    下載模型
-                  </button>
-                )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  onClick={() => cancelTraining(selectedJobId)}
+                >
+                  <XCircle size={16} />
+                  取消訓練
+                </button>
               </div>
-
-              {jobDetails.error && (
-                <div className="error-section">
-                  <h4>錯誤信息</h4>
-                  <div className="error-message">
-                    <pre>{jobDetails.error}</pre>
-                  </div>
-                </div>
-              )}
-            </div>
+            </>
           )}
         </div>
       </div>

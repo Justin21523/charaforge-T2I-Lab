@@ -16,10 +16,10 @@
   flex: 1;
   padding: var(--spacing-lg);
   overflow-y: auto;
-  background: var(--color-white);
+  background: var(--color-gray-50);
   border-radius: var(--border-radius-lg);
   margin: var(--spacing-md);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-gray-200);
 }
 
 @media (max-width: 768px) {

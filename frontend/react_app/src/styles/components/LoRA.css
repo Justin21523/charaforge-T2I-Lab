@@ -9,7 +9,6 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--spacing-lg);
-  height: calc(100vh - 180px);
 }
 
 .lora-section {
@@ -210,5 +209,15 @@
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
     height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .lora-content {
+    gap: var(--spacing-md);
+  }
+
+  .lora-section {
+    padding: var(--spacing-md);
   }
 }

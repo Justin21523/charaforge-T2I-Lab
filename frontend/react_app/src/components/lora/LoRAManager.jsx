@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import '../../styles/components/LoRA.css';
 
 const LoRAManager = () => {
-  const { apiCall, isLoading } = useAPI();
+  const { apiCall, apiService, isLoading } = useAPI();
   const [availableLoras, setAvailableLoras] = useState([]);
   const [loadedLoras, setLoadedLoras] = useState({});
   const [selectedLora, setSelectedLora] = useState(null);

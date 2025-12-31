@@ -12,6 +12,7 @@ import {
 import '../../styles/components/Sidebar.css';
 
 const Sidebar = ({ currentPath }) => {
+  const normalizedPath = currentPath === "/" ? "/generation" : currentPath;
   const menuItems = [
     {
       path: '/generation',
@@ -20,22 +21,22 @@ const Sidebar = ({ currentPath }) => {
       description: '文字轉圖片生成'
     },
     {
-      path: '/lora',
-      icon: Layers,
-      label: 'LoRA 管理',
-      description: '模型載入與管理'
-    },
-    {
       path: '/batch',
       icon: Zap,
-      label: '批次處理',
-      description: '大量圖片生成'
+      label: '批次生成',
+      description: '大量任務生成'
     },
     {
       path: '/training',
       icon: Brain,
-      label: '訓練監控',
-      description: 'LoRA 訓練狀態'
+      label: '訓練 / 監控',
+      description: 'LoRA 訓練進度'
+    },
+    {
+      path: '/lora',
+      icon: Layers,
+      label: 'LoRA 管理',
+      description: '載入 / 卸載 LoRA'
     },
     {
       path: '/gallery',
@@ -50,7 +51,7 @@ const Sidebar = ({ currentPath }) => {
       <nav className="sidebar-nav">
         {menuItems.map((item) => {
           const Icon = item.icon;
-          const isActive = currentPath === item.path;
+          const isActive = normalizedPath === item.path;
 
           return (
             <Link
