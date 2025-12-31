@@ -1,0 +1,15 @@
+[Unit]
+Description=CharaForge T2I Lab async T2I worker (Redis queue)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/c/ai_projects/charaforge-T2I-Lab
+EnvironmentFile=/mnt/c/ai_projects/charaforge-T2I-Lab/.env
+ExecStart=/usr/bin/env bash -lc 'python -m api.t2i_worker'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+

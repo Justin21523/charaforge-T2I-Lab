@@ -67,6 +67,29 @@ services:
         condition: service_healthy
     command: celery -A workers.celery_app worker --loglevel=INFO --queues=training --concurrency=1
 
+  t2i_worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      - PROJECT_SLUG=charaforge-t2i-lab
+      - AI_MODELS_ROOT=/mnt/c/ai_models
+      - AI_CACHE_ROOT=/mnt/c/ai_cache
+      - AI_DATASETS_ROOT=/mnt/data/datasets
+      - AI_TRAINING_ROOT=/mnt/data/training
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - API_T2I_WORKER_ENABLED=true
+    volumes:
+      - /mnt/c/ai_models:/mnt/c/ai_models
+      - /mnt/c/ai_cache:/mnt/c/ai_cache
+      - /mnt/data:/mnt/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m api.t2i_worker
+
   react:
     image: node:18-alpine
     working_dir: /app/frontend/react_app

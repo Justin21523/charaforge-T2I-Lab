@@ -1,0 +1,15 @@
+[Unit]
+Description=CharaForge T2I Lab API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/c/ai_projects/charaforge-T2I-Lab
+EnvironmentFile=/mnt/c/ai_projects/charaforge-T2I-Lab/.env
+ExecStart=/usr/bin/env bash -lc 'uvicorn api.main:app --host 0.0.0.0 --port 8000'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+

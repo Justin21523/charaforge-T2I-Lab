@@ -46,18 +46,23 @@ docker run -p 6379:6379 --name redis -d redis:7
 bash scripts/start_api.sh
 ```
 
-3) Start worker (training queue):
+3) Start T2I worker (async generation queue):
+```bash
+bash scripts/start_t2i_worker.sh
+```
+
+4) Start worker (training queue):
 ```bash
 bash scripts/start_worker.sh
 ```
 
-4) Scan models into registry:
+5) Scan models into registry:
 ```bash
 python scripts/scan_models.py --replace
 # or: curl -X POST http://localhost:8000/api/v1/models/scan -H 'Content-Type: application/json' -d '{"replace":true}'
 ```
 
-5) Start React UI:
+6) Start React UI:
 ```bash
 cd frontend/react_app
 npm ci
@@ -81,7 +86,28 @@ npm run dev
 - `/api/v1/models/scan` requires an `admin` key when auth is enabled.
 - For browser WebSockets, pass `?api_key=...` (headers are not supported by the WebSocket API).
 - Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
+- Bucket limits: `API_UPLOAD_RATE_LIMIT` and `API_DATASETS_RATE_LIMIT` (requests/minute, 0 disables).
+- Cost-based throttles: `API_T2I_COST_RATE_LIMIT` (cost units/minute, 0 disables).
 - Frontend: set the API key in the header UI (stored in localStorage) instead of baking it into build env vars.
+
+### Managed API Keys (`/api/v1/auth/*`)
+
+- Managed keys are stored hashed under `$AI_CACHE_ROOT/auth/api_keys.json` and can be created/revoked/rotated by an `admin` key.
+- Key format: `cfk_<key_id>.<secret>` (send via `X-API-Key` header by default).
+
+Examples:
+```bash
+# Who am I?
+curl -s http://localhost:8000/api/v1/auth/me -H "X-API-Key: $API_KEY"
+
+# List keys (admin only)
+curl -s http://localhost:8000/api/v1/auth/keys -H "X-API-Key: $ADMIN_KEY"
+
+# Create a scoped key (admin only)
+curl -s -X POST http://localhost:8000/api/v1/auth/keys \\
+  -H "Content-Type: application/json" -H "X-API-Key: $ADMIN_KEY" \\
+  -d '{"role":"user","scopes":["t2i:generate"],"label":"frontend"}'
+```
 
 ### Error Format + Request IDs
 
