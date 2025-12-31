@@ -72,6 +72,126 @@ test_endpoint() {
     return 1
 }
 
+test_async_t2i_flow() {
+    local payload=$1
+
+    log_info "Testing: T2I Async Job Flow"
+
+    local submit_response
+    submit_response=$(curl -s -w "\n%{http_code}" -X "POST" \
+        -H "Content-Type: application/json" \
+        "${CURL_AUTH_ARGS[@]}" \
+        -d "$payload" \
+        "$API_URL/api/v1/t2i/submit")
+
+    local submit_code
+    submit_code=$(echo "$submit_response" | tail -n1)
+    local submit_body
+    submit_body=$(echo "$submit_response" | head -n -1)
+
+    if [ "$submit_code" -ne 200 ]; then
+        log_error "T2I Submit (HTTP $submit_code)"
+        echo "Response: $submit_body"
+        return 1
+    fi
+
+    local job_id
+    job_id=$(
+        python -c 'import json
+import sys
+
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+print(data.get("job_id", "") or "")' <<<"$submit_body"
+    )
+
+    if [ -z "$job_id" ]; then
+        log_error "T2I Submit missing job_id"
+        echo "Response: $submit_body"
+        return 1
+    fi
+
+    log_success "T2I Submit (job_id=$job_id)"
+
+    local status_response
+    status_response=$(curl -s -w "\n%{http_code}" "${CURL_AUTH_ARGS[@]}" "$API_URL/api/v1/t2i/status/$job_id")
+    local status_code
+    status_code=$(echo "$status_response" | tail -n1)
+    local status_body
+    status_body=$(echo "$status_response" | head -n -1)
+
+    if [ "$status_code" -ne 200 ]; then
+        log_error "T2I Status (HTTP $status_code)"
+        echo "Response: $status_body"
+        return 1
+    fi
+
+    local status
+    status=$(
+        python -c 'import json
+import sys
+
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+print(data.get("status", "") or "")' <<<"$status_body"
+    )
+
+    if [ -z "$status" ]; then
+        log_error "T2I Status missing status field"
+        echo "Response: $status_body"
+        return 1
+    fi
+
+    log_success "T2I Status (status=$status)"
+
+    # Optional: wait briefly for completion; if it doesn't finish, treat as warning.
+    local final_status="$status"
+    for _ in {1..15}; do
+        if [[ "$final_status" == "succeeded" || "$final_status" == "failed" || "$final_status" == "canceled" ]]; then
+            break
+        fi
+        sleep 1
+        status_body=$(curl -s "${CURL_AUTH_ARGS[@]}" "$API_URL/api/v1/t2i/status/$job_id")
+        final_status=$(
+            python -c 'import json
+import sys
+
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw) if raw else {}
+except Exception:
+    data = {}
+print(data.get("status", "") or "")' <<<"$status_body"
+        )
+    done
+
+    if [[ "$final_status" == "queued" || "$final_status" == "running" ]]; then
+        log_warn "T2I Job not finished yet (status=$final_status); attempting cancel"
+        local cancel_response
+        cancel_response=$(curl -s -w "\n%{http_code}" -X "POST" "${CURL_AUTH_ARGS[@]}" "$API_URL/api/v1/t2i/cancel/$job_id")
+        local cancel_code
+        cancel_code=$(echo "$cancel_response" | tail -n1)
+        local cancel_body
+        cancel_body=$(echo "$cancel_response" | head -n -1)
+        if [ "$cancel_code" -eq 200 ]; then
+            log_success "T2I Cancel requested"
+        else
+            log_warn "T2I Cancel failed (HTTP $cancel_code)"
+            echo "Response: $cancel_body"
+        fi
+    else
+        log_success "T2I Job finished (status=$final_status)"
+    fi
+
+    return 0
+}
+
 echo "🧪 CharaForge T2I API Test Suite"
 echo "================================"
 echo "API URL: $API_URL"
@@ -114,6 +234,7 @@ generation_data='{
   "batch_size": 1
 }'
 run_test test_endpoint "POST" "/api/v1/t2i/generate" "$generation_data" "200,503" "T2I Generate (200 or 503)"
+run_test test_async_t2i_flow "$generation_data"
 
 # Training submission may return 400 when dataset does not exist (expected).
 training_data='{
