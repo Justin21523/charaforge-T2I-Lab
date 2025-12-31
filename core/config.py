@@ -239,6 +239,23 @@ class APIConfig(BaseSettings):
     t2i_job_max_attempts: int = Field(
         default=2, ge=1, validation_alias=AliasChoices("T2I_JOB_MAX_ATTEMPTS", "API_T2I_JOB_MAX_ATTEMPTS")
     )
+    t2i_max_concurrent: int = Field(
+        default=1, ge=0, validation_alias=AliasChoices("T2I_MAX_CONCURRENT", "API_T2I_MAX_CONCURRENT")
+    )
+    t2i_max_queue: int = Field(
+        default=8, ge=0, validation_alias=AliasChoices("T2I_MAX_QUEUE", "API_T2I_MAX_QUEUE")
+    )
+    t2i_cost_rate_limit: int = Field(
+        default=0, ge=0, validation_alias=AliasChoices("T2I_COST_RATE_LIMIT", "API_T2I_COST_RATE_LIMIT")
+    )
+
+    # Bucket rate limits (requests/minute, 0 disables)
+    upload_rate_limit: int = Field(
+        default=30, ge=0, validation_alias=AliasChoices("UPLOAD_RATE_LIMIT", "API_UPLOAD_RATE_LIMIT")
+    )
+    datasets_rate_limit: int = Field(
+        default=60, ge=0, validation_alias=AliasChoices("DATASETS_RATE_LIMIT", "API_DATASETS_RATE_LIMIT")
+    )
 
     # File uploads
     max_file_size_mb: int = Field(default=50, ge=1, le=500)

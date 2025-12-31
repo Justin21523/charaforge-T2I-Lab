@@ -35,6 +35,7 @@ def main() -> None:
         job_ttl_seconds=int(settings.api.t2i_job_ttl_seconds or 0),
         stale_seconds=int(settings.api.t2i_job_stale_seconds or 0),
         max_attempts=int(settings.api.t2i_job_max_attempts or 1),
+        max_concurrent_per_owner=int(settings.api.t2i_max_concurrent or 1),
     )
 
     stop = {"value": False}
@@ -55,4 +56,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

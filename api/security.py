@@ -133,16 +133,27 @@ class RateLimiter:
         self._redis_url: Optional[str] = None
         self._redis_unavailable_until = 0.0
 
-    def check(self, key: str, limit: int, redis_url: Optional[str] = None) -> RateLimitResult:
+    def check(
+        self,
+        key: str,
+        limit: int,
+        *,
+        cost: int = 1,
+        redis_url: Optional[str] = None,
+    ) -> RateLimitResult:
         if limit <= 0:
             return RateLimitResult(allowed=True, limit=0, remaining=0, reset_epoch=0)
+
+        cost = int(cost or 1)
+        if cost < 1:
+            cost = 1
 
         now = time.time()
         window_id = int(now // self.window_seconds)
         reset_epoch = int((window_id + 1) * self.window_seconds)
 
         if redis_url:
-            count = self._check_redis(redis_url, key, window_id)
+            count = self._check_redis(redis_url, key, window_id, cost)
             if count is not None:
                 remaining = max(0, limit - count)
                 return RateLimitResult(
@@ -152,7 +163,7 @@ class RateLimiter:
                     reset_epoch=reset_epoch,
                 )
 
-        count = self._check_memory(key, window_id)
+        count = self._check_memory(key, window_id, cost)
         remaining = max(0, limit - count)
         return RateLimitResult(
             allowed=count <= limit,
@@ -161,12 +172,12 @@ class RateLimiter:
             reset_epoch=reset_epoch,
         )
 
-    def _check_memory(self, key: str, window_id: int) -> int:
+    def _check_memory(self, key: str, window_id: int, cost: int) -> int:
         current = self._memory.get(key)
         if current and current[0] == window_id:
-            count = current[1] + 1
+            count = current[1] + cost
         else:
-            count = 1
+            count = cost
         self._memory[key] = (window_id, count)
 
         if len(self._memory) > 20_000:
@@ -204,14 +215,16 @@ class RateLimiter:
 
         return self._redis_client
 
-    def _check_redis(self, redis_url: str, key: str, window_id: int) -> Optional[int]:
+    def _check_redis(
+        self, redis_url: str, key: str, window_id: int, cost: int
+    ) -> Optional[int]:
         client = self._get_redis_client(redis_url)
         if client is None:
             return None
 
         redis_key = f"charaforge:ratelimit:{key}:{window_id}"
         try:
-            count = int(client.incr(redis_key))
+            count = int(client.incrby(redis_key, cost))
             client.expire(redis_key, self.window_seconds + 1)
             return count
         except Exception as exc:

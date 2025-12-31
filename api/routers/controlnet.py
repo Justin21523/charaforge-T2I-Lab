@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import secrets
+import time
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -21,6 +22,7 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from api.t2i_cost import estimate_t2i_cost
 from core.config import get_app_paths, get_settings
 from core.t2i.pipeline import PIPELINE_LOCK, GenerationParams, get_pipeline_manager
 
@@ -46,6 +48,52 @@ DEFAULT_CONTROLNET_MODELS: Dict[str, Dict[str, str]] = {
         "sdxl": "diffusers/controlnet-lineart-sdxl-1.0",
     },
 }
+
+
+def _enforce_t2i_cost_limit(request: Request, req: "ControlNetGenerateRequest") -> None:
+    settings = get_settings()
+    limit = int(settings.api.t2i_cost_rate_limit or 0)
+    if limit <= 0:
+        return
+
+    cost = estimate_t2i_cost(
+        width=req.width, height=req.height, steps=req.steps, batch_size=req.batch_size
+    )
+    client_key = getattr(request.state, "client_key", "ip:unknown")
+    rate_limiter = getattr(request.app.state, "rate_limiter", None)
+    if rate_limiter is None:
+        return
+    result = rate_limiter.check(
+        key=f"t2i_cost:{client_key}",
+        limit=limit,
+        cost=cost,
+        redis_url=getattr(request.app.state, "redis_url", None),
+    )
+    if result.allowed:
+        return
+
+    retry_after = max(0, result.reset_epoch - int(time.time()))
+    raise HTTPException(
+        status_code=429,
+        detail={
+            "error": "T2I_COST_LIMITED",
+            "message": "T2I cost rate limit exceeded",
+            "details": {
+                "bucket": "t2i_cost",
+                "cost": cost,
+                "limit": result.limit,
+                "remaining": result.remaining,
+                "reset": result.reset_epoch,
+            },
+        },
+        headers={
+            "Retry-After": str(retry_after),
+            "X-RateLimit-Bucket": "t2i_cost",
+            "X-RateLimit-Bucket-Limit": str(result.limit),
+            "X-RateLimit-Bucket-Remaining": str(result.remaining),
+            "X-RateLimit-Bucket-Reset": str(result.reset_epoch),
+        },
+    )
 
 
 class ControlNetGenerateRequest(BaseModel):
@@ -255,6 +303,8 @@ async def generate_controlnet(
     if control_type not in ALLOWED_CONTROL_TYPES:
         raise HTTPException(status_code=404, detail="Unknown control type")
 
+    _enforce_t2i_cost_limit(request, req)
+
     try:
         control_image = _decode_data_url(req.control_image)
     except Exception as exc:
@@ -299,4 +349,3 @@ async def get_controlnet_image(job_id: str, filename: str):
         media_type = "image/webp"
 
     return FileResponse(path=str(path), media_type=media_type, filename=path.name)
-

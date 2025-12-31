@@ -379,6 +379,7 @@ class _RedisBackend:
         job_ttl_seconds: int = 86400,
         stale_seconds: int = 600,
         max_attempts: int = 2,
+        max_concurrent_per_owner: int = 1,
         worker_enabled: bool = True,
     ):
         if redis is None:
@@ -389,6 +390,7 @@ class _RedisBackend:
         self._job_ttl_seconds = int(job_ttl_seconds)
         self._stale_seconds = int(stale_seconds)
         self._max_attempts = int(max_attempts)
+        self._max_concurrent_per_owner = int(max_concurrent_per_owner)
         self._worker_enabled = bool(worker_enabled)
 
         self._worker_id = uuid.uuid4().hex
@@ -548,6 +550,30 @@ class _RedisBackend:
                 self._client.srem(self._owner_running_key(owner), job_id)
             self._cleanup_processing(job_id)
             return
+
+        if owner and self._max_concurrent_per_owner > 0:
+            try:
+                running_now = int(self._client.scard(self._owner_running_key(owner)) or 0)
+            except Exception:
+                running_now = 0
+
+            if running_now >= self._max_concurrent_per_owner:
+                try:
+                    pipe = self._client.pipeline()
+                    pipe.lrem(self._processing_key(), 0, job_id)
+                    pipe.rpush(self._queue_key(), job_id)
+                    pipe.execute()
+                except Exception:
+                    try:
+                        self._client.rpush(self._queue_key(), job_id)
+                    except Exception:
+                        pass
+                    try:
+                        self._client.lrem(self._processing_key(), 0, job_id)
+                    except Exception:
+                        pass
+                time.sleep(0.25)
+                return
 
         record["status"] = "running"
         record["started_at"] = time.time()
@@ -756,6 +782,7 @@ class T2IJobManager:
         job_ttl_seconds: int = 86400,
         stale_seconds: int = 600,
         max_attempts: int = 2,
+        max_concurrent_per_owner: int = 1,
     ):
         self._backend: _MemoryBackend | _RedisBackend
 
@@ -766,6 +793,7 @@ class T2IJobManager:
                     job_ttl_seconds=job_ttl_seconds,
                     stale_seconds=stale_seconds,
                     max_attempts=max_attempts,
+                    max_concurrent_per_owner=max_concurrent_per_owner,
                     worker_enabled=worker_enabled,
                 )
                 if candidate.ping():

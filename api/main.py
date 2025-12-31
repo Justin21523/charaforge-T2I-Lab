@@ -122,6 +122,7 @@ def create_app() -> FastAPI:
             job_ttl_seconds=int(settings.api.t2i_job_ttl_seconds or 0),
             stale_seconds=int(settings.api.t2i_job_stale_seconds or 0),
             max_attempts=int(settings.api.t2i_job_max_attempts or 1),
+            max_concurrent_per_owner=int(settings.api.t2i_max_concurrent or 1),
         )
     except Exception as exc:
         logger.warning("T2I async jobs disabled: %s", exc)
@@ -181,20 +182,30 @@ def create_app() -> FastAPI:
         request.state.api_key_id = auth.key_id if auth else None
         request.state.client_key = get_client_key(request, api_key=presented if auth else None)
 
-        rate_limit = int(
-            (settings.api.scan_rate_limit if is_scan_request else settings.api.rate_limit) or 0
-        )
-        rate_result = None
-        if rate_limit > 0:
-            rate_client_key = request.state.client_key
-            bucket = "models_scan" if is_scan_request else "default"
-            rate_result = app.state.rate_limiter.check(
-                key=f"{bucket}:{rate_client_key}",
-                limit=rate_limit,
+        rate_client_key = request.state.client_key
+        global_rate_limit = int(settings.api.rate_limit or 0)
+
+        special_bucket = None
+        special_limit = 0
+        if is_scan_request:
+            special_bucket = "models_scan"
+            special_limit = int(settings.api.scan_rate_limit or 0)
+        elif path.startswith(f"{API_V1_PREFIX}/upload"):
+            special_bucket = "upload"
+            special_limit = int(settings.api.upload_rate_limit or 0)
+        elif path.startswith(f"{API_V1_PREFIX}/datasets"):
+            special_bucket = "datasets"
+            special_limit = int(settings.api.datasets_rate_limit or 0)
+
+        global_result = None
+        if global_rate_limit > 0:
+            global_result = app.state.rate_limiter.check(
+                key=f"global:{rate_client_key}",
+                limit=global_rate_limit,
                 redis_url=app.state.redis_url,
             )
-            if not rate_result.allowed:
-                retry_after = max(0, rate_result.reset_epoch - int(time.time()))
+            if not global_result.allowed:
+                retry_after = max(0, global_result.reset_epoch - int(time.time()))
                 return JSONResponse(
                     status_code=429,
                     content=_error_payload(
@@ -202,17 +213,55 @@ def create_app() -> FastAPI:
                         code="RATE_LIMITED",
                         message="Rate limit exceeded",
                         details={
-                            "limit": rate_result.limit,
-                            "remaining": rate_result.remaining,
-                            "reset": rate_result.reset_epoch,
+                            "bucket": "global",
+                            "limit": global_result.limit,
+                            "remaining": global_result.remaining,
+                            "reset": global_result.reset_epoch,
                         },
                     ),
                     headers={
                         "Retry-After": str(retry_after),
-                        "X-RateLimit-Limit": str(rate_result.limit),
-                        "X-RateLimit-Remaining": str(rate_result.remaining),
-                        "X-RateLimit-Reset": str(rate_result.reset_epoch),
+                        "X-RateLimit-Bucket": "global",
+                        "X-RateLimit-Limit": str(global_result.limit),
+                        "X-RateLimit-Remaining": str(global_result.remaining),
+                        "X-RateLimit-Reset": str(global_result.reset_epoch),
                     },
+                )
+
+        bucket_result = None
+        if special_bucket and special_limit > 0:
+            bucket_result = app.state.rate_limiter.check(
+                key=f"{special_bucket}:{rate_client_key}",
+                limit=special_limit,
+                redis_url=app.state.redis_url,
+            )
+            if not bucket_result.allowed:
+                retry_after = max(0, bucket_result.reset_epoch - int(time.time()))
+                headers: dict[str, str] = {
+                    "Retry-After": str(retry_after),
+                    "X-RateLimit-Bucket": special_bucket,
+                    "X-RateLimit-Bucket-Limit": str(bucket_result.limit),
+                    "X-RateLimit-Bucket-Remaining": str(bucket_result.remaining),
+                    "X-RateLimit-Bucket-Reset": str(bucket_result.reset_epoch),
+                }
+                if global_result is not None:
+                    headers["X-RateLimit-Limit"] = str(global_result.limit)
+                    headers["X-RateLimit-Remaining"] = str(global_result.remaining)
+                    headers["X-RateLimit-Reset"] = str(global_result.reset_epoch)
+                return JSONResponse(
+                    status_code=429,
+                    content=_error_payload(
+                        request,
+                        code="RATE_LIMITED",
+                        message="Rate limit exceeded",
+                        details={
+                            "bucket": special_bucket,
+                            "limit": bucket_result.limit,
+                            "remaining": bucket_result.remaining,
+                            "reset": bucket_result.reset_epoch,
+                        },
+                    ),
+                    headers=headers,
                 )
 
         if auth_enabled:
@@ -237,10 +286,15 @@ def create_app() -> FastAPI:
 
         response = await call_next(request)
 
-        if rate_result is not None:
-            response.headers["X-RateLimit-Limit"] = str(rate_result.limit)
-            response.headers["X-RateLimit-Remaining"] = str(rate_result.remaining)
-            response.headers["X-RateLimit-Reset"] = str(rate_result.reset_epoch)
+        if global_result is not None:
+            response.headers["X-RateLimit-Limit"] = str(global_result.limit)
+            response.headers["X-RateLimit-Remaining"] = str(global_result.remaining)
+            response.headers["X-RateLimit-Reset"] = str(global_result.reset_epoch)
+        if bucket_result is not None and special_bucket:
+            response.headers["X-RateLimit-Bucket"] = str(special_bucket)
+            response.headers["X-RateLimit-Bucket-Limit"] = str(bucket_result.limit)
+            response.headers["X-RateLimit-Bucket-Remaining"] = str(bucket_result.remaining)
+            response.headers["X-RateLimit-Bucket-Reset"] = str(bucket_result.reset_epoch)
 
         return response
 
@@ -301,6 +355,21 @@ def create_app() -> FastAPI:
         if isinstance(detail, str):
             message = detail
             details = {}
+        elif isinstance(detail, dict):
+            if "error" in detail and detail.get("error"):
+                code = str(detail.get("error"))
+
+            if "message" in detail and detail.get("message"):
+                message = str(detail.get("message"))
+            elif "detail" in detail and detail.get("detail"):
+                message = str(detail.get("detail"))
+            else:
+                message = "HTTP request failed"
+
+            if isinstance(detail.get("details"), dict):
+                details = dict(detail.get("details") or {})
+            else:
+                details = {k: v for k, v in detail.items() if k not in {"error", "message"}}
         else:
             message = "HTTP request failed"
             details = {"detail": detail}
