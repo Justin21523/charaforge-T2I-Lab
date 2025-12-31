@@ -36,6 +36,7 @@ class APIKeyInfo(BaseModel):
     scopes: List[str] = Field(default_factory=list)
     label: Optional[str] = None
     created_at: Optional[str] = None
+    last_used_at: Optional[str] = None
     revoked_at: Optional[str] = None
 
 
@@ -94,6 +95,7 @@ async def create_key(request: Request, payload: CreateKeyRequest) -> CreateKeyRe
             role=payload.role,
             scopes=payload.scopes,
             label=payload.label,
+            actor_key_id=getattr(request.state, "api_key_id", None),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -111,7 +113,7 @@ async def create_key(request: Request, payload: CreateKeyRequest) -> CreateKeyRe
 async def revoke_key(request: Request, key_id: str) -> Dict[str, Any]:
     _require_admin(request)
     store = _store(request)
-    ok = store.revoke_key(key_id)
+    ok = store.revoke_key(key_id, actor_key_id=getattr(request.state, "api_key_id", None))
     if not ok:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"status": "ok", "key_id": key_id, "revoked": True}
@@ -121,7 +123,7 @@ async def revoke_key(request: Request, key_id: str) -> Dict[str, Any]:
 async def rotate_key(request: Request, key_id: str) -> RotateKeyResponse:
     _require_admin(request)
     store = _store(request)
-    rotated = store.rotate_key(key_id)
+    rotated = store.rotate_key(key_id, actor_key_id=getattr(request.state, "api_key_id", None))
     if not rotated:
         raise HTTPException(status_code=404, detail="Key not found")
 
@@ -136,4 +138,3 @@ async def rotate_key(request: Request, key_id: str) -> RotateKeyResponse:
         scopes=list(record.get("scopes") or []),
         label=record.get("label"),
     )
-

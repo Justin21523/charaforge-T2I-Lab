@@ -116,6 +116,17 @@ def extract_api_key(request: Request, header_name: str) -> Optional[str]:
     )
 
 
+def scope_allows(scopes: set[str], required: str) -> bool:
+    if not required:
+        return True
+    if "*" in scopes:
+        return True
+    if required in scopes:
+        return True
+    prefix = required.split(":", 1)[0] + ":*"
+    return prefix in scopes
+
+
 @dataclass(frozen=True)
 class RateLimitResult:
     allowed: bool

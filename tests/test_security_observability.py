@@ -150,3 +150,42 @@ async def test_t2i_status_is_owner_only_and_images_accept_token(make_app, tmp_pa
         )
         assert bad.status_code == 403
         _assert_error_schema(bad)
+
+
+@pytest.mark.anyio
+async def test_scoped_keys_enforce_permissions(make_app):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/v1/auth/keys",
+            json={"role": "user", "scopes": ["datasets:read"], "label": "scoped"},
+            headers={"X-API-Key": "admin_key"},
+        )
+        assert created.status_code == 200
+        key_payload = created.json()
+        scoped_key = key_payload["key"]
+        key_id = key_payload["key_id"]
+
+        datasets = await client.get("/api/v1/datasets/root", headers={"X-API-Key": scoped_key})
+        assert datasets.status_code == 200
+
+        blocked = await client.post("/api/v1/t2i/generate", json={}, headers={"X-API-Key": scoped_key})
+        assert blocked.status_code == 403
+        _assert_error_schema(blocked)
+        assert blocked.json()["error"] in {"INSUFFICIENT_SCOPE", "FORBIDDEN"}
+
+        listed = await client.get(
+            "/api/v1/auth/keys",
+            headers={"X-API-Key": "admin_key"},
+        )
+        assert listed.status_code == 200
+        keys = listed.json()["keys"]
+        match = next((item for item in keys if item.get("key_id") == key_id), None)
+        assert match is not None
+        assert match.get("last_used_at")

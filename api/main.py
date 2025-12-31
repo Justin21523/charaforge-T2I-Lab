@@ -28,6 +28,7 @@ from api.security import (
     is_exempt_v1_request,
     parse_api_keys,
     resolve_api_key,
+    scope_allows,
 )
 from core.config import bootstrap_config, get_settings
 from core.exceptions import CharaForgeError
@@ -62,6 +63,46 @@ def _error_payload(
         "details": details or {},
         "request_id": _get_request_id(request),
     }
+
+
+def _required_scope(path: str, method: str) -> str | None:
+    if path == f"{API_V1_PREFIX}/models/scan":
+        return "models:scan"
+    if path.startswith(f"{API_V1_PREFIX}/models/"):
+        return "models:read"
+    if path.startswith(f"{API_V1_PREFIX}/auth/keys"):
+        return "auth:manage"
+    if path.startswith(f"{API_V1_PREFIX}/t2i/"):
+        if path.startswith(f"{API_V1_PREFIX}/t2i/images/") or path.startswith(
+            f"{API_V1_PREFIX}/t2i/status/"
+        ):
+            return "t2i:read"
+        if path.startswith(f"{API_V1_PREFIX}/t2i/cancel/"):
+            return "t2i:cancel"
+        return "t2i:generate"
+    if path.startswith(f"{API_V1_PREFIX}/controlnet/"):
+        if path.startswith(f"{API_V1_PREFIX}/controlnet/images/") or path == (
+            f"{API_V1_PREFIX}/controlnet/types"
+        ):
+            return "controlnet:read"
+        return "controlnet:generate"
+    if path.startswith(f"{API_V1_PREFIX}/upload"):
+        if method in {"GET", "HEAD"}:
+            return "upload:read"
+        return "upload:write"
+    if path.startswith(f"{API_V1_PREFIX}/datasets"):
+        if method in {"GET", "HEAD"}:
+            return "datasets:read"
+        return "datasets:write"
+    if path.startswith(f"{API_V1_PREFIX}/lora"):
+        if method in {"GET", "HEAD"}:
+            return "lora:read"
+        return "lora:manage"
+    if path.startswith(f"{API_V1_PREFIX}/finetune"):
+        return "train:manage"
+    if path.startswith(f"{API_V1_PREFIX}/batch"):
+        return "batch:manage"
+    return None
 
 
 @asynccontextmanager
@@ -185,6 +226,11 @@ def create_app() -> FastAPI:
         request.state.auth_scopes = auth.scopes if auth else set()
         request.state.api_key_id = auth.key_id if auth else None
         request.state.client_key = get_client_key(request, api_key=presented if auth else None)
+        if auth and auth.key_id and api_key_store is not None:
+            try:
+                api_key_store.mark_used(auth.key_id)
+            except Exception:
+                pass
 
         rate_client_key = request.state.client_key
         global_rate_limit = int(settings.api.rate_limit or 0)
@@ -280,15 +326,30 @@ def create_app() -> FastAPI:
                         message="Unauthorized",
                     ),
                 )
-            if is_scan_request and role != "admin":
-                return JSONResponse(
-                    status_code=403,
-                    content=_error_payload(
-                        request,
-                        code="FORBIDDEN",
-                        message="Forbidden",
-                    ),
-                )
+
+            required_scope = _required_scope(path, request.method)
+            if required_scope:
+                scopes = auth.scopes if auth else set()
+                if scopes:
+                    if not scope_allows(scopes, required_scope):
+                        return JSONResponse(
+                            status_code=403,
+                            content=_error_payload(
+                                request,
+                                code="INSUFFICIENT_SCOPE",
+                                message="Forbidden",
+                                details={"required": required_scope},
+                            ),
+                        )
+                elif required_scope == "models:scan" and role != "admin":
+                    return JSONResponse(
+                        status_code=403,
+                        content=_error_payload(
+                            request,
+                            code="FORBIDDEN",
+                            message="Forbidden",
+                        ),
+                    )
 
         response = await call_next(request)
 
