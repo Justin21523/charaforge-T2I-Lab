@@ -2,13 +2,39 @@
 import axios from "axios";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const API_KEY = import.meta.env.VITE_API_KEY || "";
 const API_KEY_HEADER = import.meta.env.VITE_API_KEY_HEADER || "X-API-Key";
+
+const STORAGE_API_KEY = "charaforge.apiKey";
+const STORAGE_API_KEY_HEADER = "charaforge.apiKeyHeader";
+
+const readStoredJson = (key, fallback) => {
+  try {
+    if (typeof window === "undefined") return fallback;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch (e) {
+    return fallback;
+  }
+};
+
+const writeStoredJson = (key, value) => {
+  try {
+    if (typeof window === "undefined") return;
+    if (value === null || value === undefined) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    // ignore
+  }
+};
 
 class APIService {
   constructor() {
-    this.apiKey = API_KEY;
-    this.apiKeyHeader = API_KEY_HEADER;
+    this.apiKeyHeader = readStoredJson(STORAGE_API_KEY_HEADER, API_KEY_HEADER) || API_KEY_HEADER;
+    this.apiKey = readStoredJson(STORAGE_API_KEY, "") || "";
 
     const defaultHeaders = {
       "Content-Type": "application/json",
@@ -53,6 +79,39 @@ class APIService {
     );
   }
 
+  getApiKey() {
+    return this.apiKey || "";
+  }
+
+  getApiKeyHeader() {
+    return this.apiKeyHeader || API_KEY_HEADER;
+  }
+
+  setApiKey(apiKey, apiKeyHeader = this.apiKeyHeader) {
+    const nextHeader = apiKeyHeader || API_KEY_HEADER;
+    const prevHeader = this.apiKeyHeader;
+
+    this.apiKey = apiKey || "";
+    this.apiKeyHeader = nextHeader;
+
+    if (prevHeader && prevHeader !== nextHeader) {
+      delete this.client.defaults.headers.common[prevHeader];
+    }
+
+    if (this.apiKey) {
+      this.client.defaults.headers.common[this.apiKeyHeader] = this.apiKey;
+    } else {
+      delete this.client.defaults.headers.common[this.apiKeyHeader];
+    }
+
+    writeStoredJson(STORAGE_API_KEY, this.apiKey);
+    writeStoredJson(STORAGE_API_KEY_HEADER, this.apiKeyHeader);
+  }
+
+  clearApiKey() {
+    this.setApiKey("");
+  }
+
   // Health check
   async healthCheck() {
     try {
@@ -65,6 +124,18 @@ class APIService {
   // Image generation
   async generateImage(params) {
     return await this.client.post("/api/v1/t2i/generate", params);
+  }
+
+  async submitT2IJob(params) {
+    return await this.client.post("/api/v1/t2i/submit", params);
+  }
+
+  async getT2IJobStatus(jobId) {
+    return await this.client.get(`/api/v1/t2i/status/${jobId}`);
+  }
+
+  async cancelT2IJob(jobId) {
+    return await this.client.post(`/api/v1/t2i/cancel/${jobId}`);
   }
 
   async controlnetGenerate(params, controlType = "pose") {

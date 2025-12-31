@@ -1,19 +1,20 @@
 // frontend/react_app/src/components/generation/GenerationPanel.jsx
-import React, { useState, useCallback } from 'react';
-import { Wand2, Shuffle, Download, Settings } from 'lucide-react';
-import { useAPI } from '../../hooks/useAPI';
-import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { DEFAULT_GENERATION_PARAMS, SAMPLERS, CONTROLNET_TYPES } from '../../utils/constants';
-import { generateRandomSeed, downloadBlob } from '../../utils/helpers';
-import ParameterControls from './ParameterControls';
-import ImagePreview from './ImagePreview';
-import Loading from '../common/Loading';
-import toast from 'react-hot-toast';
-import '../../styles/components/Generation.css';
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Shuffle, Wand2, X } from "lucide-react";
+import toast from "react-hot-toast";
+import { useAPI } from "../../hooks/useAPI";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { DEFAULT_GENERATION_PARAMS } from "../../utils/constants";
+import { downloadBlob, generateRandomSeed } from "../../utils/helpers";
+import Loading from "../common/Loading";
+import ImagePreview from "./ImagePreview";
+import ParameterControls from "./ParameterControls";
+import "../../styles/components/Generation.css";
 
 const GenerationPanel = () => {
   const { apiCall, apiService, isLoading } = useAPI();
   const [params, setParams] = useLocalStorage('generation-params', DEFAULT_GENERATION_PARAMS);
+  const [asyncMode, setAsyncMode] = useLocalStorage("t2i-async-mode", true);
   const [controlnetParams, setControlnetParams] = useState({
     enabled: false,
     type: 'pose',
@@ -24,6 +25,9 @@ const GenerationPanel = () => {
   const [generatedImages, setGeneratedImages] = useState([]);
   const [currentImage, setCurrentImage] = useState(null);
   const [generationInfo, setGenerationInfo] = useState(null);
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [activeJobStatus, setActiveJobStatus] = useState(null);
+  const activeJobRef = useRef(null);
 
   const updateParam = useCallback((key, value) => {
     setParams(prev => ({ ...prev, [key]: value }));
@@ -39,6 +43,12 @@ const GenerationPanel = () => {
       return;
     }
 
+    if (activeJobId) {
+      toast.error("目前有任務進行中，請先取消或等待完成");
+      return;
+    }
+
+    let jobId = null;
     try {
       const generationParams = { ...params };
 
@@ -66,15 +76,58 @@ const GenerationPanel = () => {
           }
         );
       } else {
-        result = await apiCall(
-          () => apiService.generateImage(generationParams),
-          null,
-          {
-            showLoading: true,
-            showSuccess: true,
-            successMessage: '圖片生成完成！'
+        if (!asyncMode) {
+          result = await apiCall(
+            () => apiService.generateImage(generationParams),
+            null,
+            {
+              showLoading: true,
+              showSuccess: true,
+              successMessage: "圖片生成完成！",
+            }
+          );
+        } else {
+          setActiveJobStatus({ status: "queued" });
+          const submit = await apiCall(
+            () => apiService.submitT2IJob(generationParams),
+            null,
+            {
+              showLoading: true,
+              showSuccess: false,
+            }
+          );
+
+          jobId = submit.job_id;
+          activeJobRef.current = jobId;
+          setActiveJobId(jobId);
+          toast.loading("任務已送出，生成中...", { id: "t2i-job" });
+
+          while (activeJobRef.current === jobId) {
+            const status = await apiService.getT2IJobStatus(jobId);
+            if (activeJobRef.current !== jobId) {
+              break;
+            }
+            setActiveJobStatus(status);
+
+            if (status.status === "succeeded") {
+              toast.success("圖片生成完成！", { id: "t2i-job" });
+              result = status;
+              break;
+            }
+            if (status.status === "failed") {
+              toast.error(status.error?.message || "生成失敗", { id: "t2i-job" });
+              break;
+            }
+            if (status.status === "canceled") {
+              toast("已取消", { id: "t2i-job" });
+              break;
+            }
+
+            // Poll every ~1s.
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((r) => setTimeout(r, 1000));
           }
-        );
+        }
       }
 
       if (result && result.image_path) {
@@ -109,8 +162,33 @@ const GenerationPanel = () => {
       }
     } catch (error) {
       console.error('Generation failed:', error);
+    } finally {
+      if (jobId) {
+        if (activeJobRef.current === jobId) {
+          activeJobRef.current = null;
+        }
+        setActiveJobId(null);
+        setActiveJobStatus(null);
+      }
     }
-  }, [params, controlnetParams, apiCall, updateParam]);
+  }, [activeJobId, asyncMode, params, controlnetParams, apiCall, updateParam]);
+
+  useEffect(() => {
+    return () => {
+      activeJobRef.current = null;
+    };
+  }, []);
+
+  const handleCancelJob = useCallback(async () => {
+    if (!activeJobId) return;
+    try {
+      const status = await apiService.cancelT2IJob(activeJobId);
+      setActiveJobStatus(status);
+      toast("已送出取消", { id: "t2i-job" });
+    } catch (error) {
+      toast.error(error.message || "取消失敗");
+    }
+  }, [activeJobId, apiService]);
 
   const handleDownload = useCallback(async (image) => {
     if (!image) return;
@@ -127,6 +205,15 @@ const GenerationPanel = () => {
     }
   }, []);
 
+  const isJobActive = Boolean(activeJobId);
+  const isBusy = isLoading || isJobActive;
+  const progressStep = activeJobStatus?.progress?.step;
+  const progressTotal = activeJobStatus?.progress?.total;
+  const progressText =
+    Number.isFinite(progressStep) && Number.isFinite(progressTotal)
+      ? `${progressStep}/${progressTotal}`
+      : "";
+
   return (
     <div className="generation-panel">
       <div className="panel-header">
@@ -135,6 +222,17 @@ const GenerationPanel = () => {
           圖片生成
         </h2>
         <div className="header-actions">
+          {!controlnetParams.enabled && (
+            <label className="checkbox-label" title="使用非同步任務（submit/status/cancel）">
+              <input
+                type="checkbox"
+                checked={asyncMode}
+                onChange={(e) => setAsyncMode(e.target.checked)}
+                className="checkbox"
+              />
+              非同步
+            </label>
+          )}
           <button
             className="btn btn-secondary"
             onClick={randomizeSeed}
@@ -145,10 +243,13 @@ const GenerationPanel = () => {
           <button
             className="btn btn-primary"
             onClick={handleGenerate}
-            disabled={isLoading}
+            disabled={isBusy}
           >
-            {isLoading ? (
-              <Loading size="small" text="生成中..." />
+            {isBusy ? (
+              <Loading
+                size="small"
+                text={progressText ? `生成中... (${progressText})` : "生成中..."}
+              />
             ) : (
               <>
                 <Wand2 size={16} />
@@ -156,6 +257,16 @@ const GenerationPanel = () => {
               </>
             )}
           </button>
+          {isJobActive && (
+            <button
+              className="btn btn-danger"
+              onClick={handleCancelJob}
+              title="取消任務"
+            >
+              <X size={16} />
+              取消
+            </button>
+          )}
         </div>
       </div>
 
