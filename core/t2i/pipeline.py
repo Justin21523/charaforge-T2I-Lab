@@ -395,10 +395,14 @@ class T2IPipelineManager:
         if isinstance(params, dict):
             params = GenerationParams(**params)
 
+        pipeline_kwargs: Dict[str, Any] = {}
+
         # Override params with kwargs
         for key, value in kwargs.items():
             if hasattr(params, key):
                 setattr(params, key, value)
+            else:
+                pipeline_kwargs[key] = value
 
         # Setup generator with seed
         generator = None
@@ -439,8 +443,9 @@ class T2IPipelineManager:
             if self.is_sdxl and params.clip_skip:
                 gen_kwargs["clip_skip"] = params.clip_skip
 
-            # Remove None values
+            # Remove None values and apply pipeline-only overrides (e.g. callbacks).
             gen_kwargs = {k: v for k, v in gen_kwargs.items() if v is not None}
+            gen_kwargs.update({k: v for k, v in pipeline_kwargs.items() if v is not None})
 
             # Generate
             with torch.autocast(self.device.type, enabled=self.device.type == "cuda"):

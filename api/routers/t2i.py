@@ -7,90 +7,16 @@ core `T2IPipelineManager` implementation.
 from __future__ import annotations
 
 import asyncio
-import secrets
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
 
-from core.config import get_app_paths, get_settings
-from core.t2i.pipeline import PIPELINE_LOCK, GenerationParams, get_pipeline_manager
+from api.schemas.t2i import GenerateRequest, GenerateResponse, JobStatusResponse, SubmitResponse
+from api.t2i_jobs import T2IJobManager, job_dir, run_generate_sync, validate_generate_request
 
 router = APIRouter(prefix="/t2i", tags=["t2i"])
-
-
-class GenerateRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=2000)
-    negative: str = Field(default="", max_length=2000)
-
-    width: int = Field(default=768, ge=256, le=2048)
-    height: int = Field(default=768, ge=256, le=2048)
-
-    steps: int = Field(default=25, ge=1, le=150)
-    cfg_scale: float = Field(default=7.5, ge=1.0, le=30.0)
-    seed: int = Field(default=-1, ge=-1, le=2**32 - 1)
-    sampler: str = Field(default="DPM++ 2M Karras", max_length=100)
-    batch_size: int = Field(default=1, ge=1, le=8)
-
-    model_type: str = Field(default="sdxl")  # "sd15" | "sdxl"
-    model: Optional[str] = Field(default=None, max_length=2000)
-
-    loras: List[Dict[str, Any]] = Field(default_factory=list)
-    clip_skip: Optional[int] = Field(default=None, ge=1, le=12)
-
-
-class GenerateResponse(BaseModel):
-    status: str
-    job_id: str
-    image_path: List[str]
-    seed: int
-    elapsed_ms: int
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
-def _pick_model_id(req: GenerateRequest) -> str:
-    settings = get_settings()
-    model_type = (req.model_type or "").lower()
-    if model_type not in {"sd15", "sdxl"}:
-        model_type = "sdxl"
-
-    if req.model:
-        return req.model
-
-    return (
-        settings.model.default_sdxl_model
-        if model_type == "sdxl"
-        else settings.model.default_sd15_model
-    )
-
-
-def _sampler_to_scheduler(sampler: str) -> Tuple[str, Dict[str, Any]]:
-    name = (sampler or "").strip().lower()
-
-    if name in {"ddim"}:
-        return "DDIM", {}
-    if name in {"lms"}:
-        return "LMS", {}
-    if name in {"euler a", "euler_a", "euler-ancestral"}:
-        return "EulerAncestral", {}
-    if name in {"euler", "heun"}:
-        return "EulerAncestral", {}
-    if name.startswith("dpm++"):
-        # Best-effort mapping to DPMSolverMultistep; we keep kwargs conservative.
-        kwargs: Dict[str, Any] = {"use_karras_sigmas": "karras" in name}
-        if "sde" in name:
-            kwargs["algorithm_type"] = "sde-dpmsolver++"
-        return "DPMSolverMultistep", kwargs
-
-    return "DPMSolverMultistep", {}
-
-
-def _job_dir(job_id: str) -> Path:
-    app_paths = get_app_paths()
-    return app_paths.outputs / "t2i" / job_id
 
 
 def _safe_resolve(path: Path, root: Path) -> Path:
@@ -101,89 +27,31 @@ def _safe_resolve(path: Path, root: Path) -> Path:
     return resolved
 
 
-def _run_generate_sync(req: GenerateRequest, job_id: str) -> Dict[str, Any]:
-    settings = get_settings()
-
-    if req.width % 8 != 0 or req.height % 8 != 0:
-        raise HTTPException(status_code=400, detail="Width/height must be multiples of 8")
-
-    if req.batch_size > settings.api.max_batch_size:
-        raise HTTPException(
-            status_code=400,
-            detail=f"batch_size exceeds limit ({settings.api.max_batch_size})",
-        )
-    if req.steps > settings.api.max_steps:
-        raise HTTPException(
-            status_code=400, detail=f"steps exceeds limit ({settings.api.max_steps})"
-        )
-
-    seed = req.seed if req.seed >= 0 else secrets.randbelow(2**32)
-    model_id = _pick_model_id(req)
-    scheduler_name, scheduler_kwargs = _sampler_to_scheduler(req.sampler)
-
-    output_dir = _job_dir(job_id)
-
-    manager = get_pipeline_manager()
-
-    with PIPELINE_LOCK:
-        if not manager.pipeline_loaded or manager.current_model != model_id:
-            if not manager.load_model(model_id):
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Failed to load model: {model_id}",
-                )
-
-        manager.set_scheduler(scheduler_name, **scheduler_kwargs)
-
-        if req.loras:
-            lora_configs = []
-            for lora in req.loras:
-                if not isinstance(lora, dict) or "name" not in lora:
-                    continue
-                lora_configs.append(
-                    {
-                        "name": str(lora["name"]),
-                        "scale": float(lora.get("scale", 1.0)),
-                        "enabled": bool(lora.get("enabled", True)),
-                    }
-                )
-            manager.load_lora_stack(lora_configs)
-        else:
-            manager.unload_loras()
-
-        params = GenerationParams(
-            prompt=req.prompt,
-            negative_prompt=req.negative or None,
-            width=req.width,
-            height=req.height,
-            num_inference_steps=req.steps,
-            guidance_scale=req.cfg_scale,
-            num_images_per_prompt=req.batch_size,
-            seed=seed,
-            clip_skip=req.clip_skip,
-        )
-
-        result = manager.generate(params)
-        saved = manager.save_generation_result(result, output_dir)
-
-    return {
-        "seed": seed,
-        "elapsed_ms": int(result.generation_time * 1000),
-        "metadata": result.metadata,
-        "saved_paths": saved,
-    }
+def _job_manager(request: Request) -> T2IJobManager:
+    manager = getattr(request.app.state, "t2i_job_manager", None)
+    if isinstance(manager, T2IJobManager):
+        return manager
+    manager = T2IJobManager()
+    request.app.state.t2i_job_manager = manager
+    return manager
 
 
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest, request: Request):
     job_id = str(uuid.uuid4())
 
-    payload = await asyncio.to_thread(_run_generate_sync, req, job_id)
+    try:
+        payload = await asyncio.to_thread(run_generate_sync, req, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     base = str(request.base_url).rstrip("/")
     image_urls = [
-        f"{base}/api/v1/t2i/images/{job_id}/{p.name}" for p in payload["saved_paths"]
-        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        f"{base}/api/v1/t2i/images/{job_id}/{name}"
+        for name in payload["saved_paths"]
+        if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
     ]
 
     return GenerateResponse(
@@ -196,12 +64,84 @@ async def generate(req: GenerateRequest, request: Request):
     )
 
 
+@router.post("/submit", response_model=SubmitResponse)
+async def submit(req: GenerateRequest, request: Request):
+    try:
+        validate_generate_request(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    manager = _job_manager(request)
+    job_id = manager.submit(req)
+    base = str(request.base_url).rstrip("/")
+    return SubmitResponse(
+        status="queued",
+        job_id=job_id,
+        status_url=f"{base}/api/v1/t2i/status/{job_id}",
+        cancel_url=f"{base}/api/v1/t2i/cancel/{job_id}",
+    )
+
+
+@router.get("/status/{job_id}", response_model=JobStatusResponse)
+async def status(job_id: str, request: Request):
+    manager = _job_manager(request)
+    snapshot = manager.get(job_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    base = str(request.base_url).rstrip("/")
+    image_urls = [
+        f"{base}/api/v1/t2i/images/{job_id}/{name}"
+        for name in snapshot.get("saved_paths") or []
+        if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+    ]
+
+    return JobStatusResponse(
+        status=str(snapshot["status"]),
+        job_id=job_id,
+        image_path=image_urls,
+        seed=snapshot.get("seed"),
+        elapsed_ms=snapshot.get("elapsed_ms"),
+        metadata=snapshot.get("metadata") or {},
+        progress=snapshot.get("progress"),
+        cancel_requested=bool(snapshot.get("cancel_requested")),
+        error=snapshot.get("error"),
+    )
+
+
+@router.post("/cancel/{job_id}", response_model=JobStatusResponse)
+async def cancel(job_id: str, request: Request):
+    manager = _job_manager(request)
+    snapshot = manager.cancel(job_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    base = str(request.base_url).rstrip("/")
+    image_urls = [
+        f"{base}/api/v1/t2i/images/{job_id}/{name}"
+        for name in snapshot.get("saved_paths") or []
+        if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+    ]
+
+    return JobStatusResponse(
+        status=str(snapshot["status"]),
+        job_id=job_id,
+        image_path=image_urls,
+        seed=snapshot.get("seed"),
+        elapsed_ms=snapshot.get("elapsed_ms"),
+        metadata=snapshot.get("metadata") or {},
+        progress=snapshot.get("progress"),
+        cancel_requested=bool(snapshot.get("cancel_requested")),
+        error=snapshot.get("error"),
+    )
+
+
 @router.get("/images/{job_id}/{filename}")
 async def get_image(job_id: str, filename: str):
     if "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    root = _job_dir(job_id)
+    root = job_dir(job_id)
     path = _safe_resolve(root / filename, root)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Image not found")
@@ -213,4 +153,3 @@ async def get_image(job_id: str, filename: str):
         media_type = "image/webp"
 
     return FileResponse(path=str(path), media_type=media_type, filename=path.name)
-
