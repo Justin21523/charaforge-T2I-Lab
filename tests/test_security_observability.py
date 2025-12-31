@@ -189,3 +189,21 @@ async def test_scoped_keys_enforce_permissions(make_app):
         match = next((item for item in keys if item.get("key_id") == key_id), None)
         assert match is not None
         assert match.get("last_used_at")
+
+
+@pytest.mark.anyio
+async def test_metrics_endpoint_when_enabled(make_app):
+    app = make_app(
+        PROMETHEUS_ENABLED="true",
+        API_ADMIN_KEYS="admin_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/metrics", headers={"X-API-Key": "admin_key"})
+        assert res.status_code == 200
+        assert res.headers.get("content-type", "").startswith("text/plain")
+        assert "X-Request-ID" in res.headers
+        assert "charaforge_http_requests_total" in res.text

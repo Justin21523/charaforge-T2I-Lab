@@ -7,6 +7,7 @@ API contract:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -17,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.routers.health import router as health_router
@@ -121,6 +122,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    json_logs = os.getenv("LOG_JSON", "").strip().lower() in {"1", "true", "yes", "on"}
     header_name = settings.api.key_header or "X-API-Key"
     admin_keys = parse_api_keys(settings.api.api_admin_keys)
     user_keys = parse_api_keys(settings.api.api_keys)
@@ -145,6 +147,21 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan,
     )
+
+    sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
+    if sentry_dsn:
+        try:
+            import sentry_sdk  # type: ignore
+            from sentry_sdk.integrations.asgi import SentryAsgiMiddleware  # type: ignore
+
+            sentry_sdk.init(
+                dsn=sentry_dsn,
+                environment=getattr(settings, "environment", None) or "development",
+                traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0") or 0.0),
+            )
+            app.add_middleware(SentryAsgiMiddleware)
+        except Exception as exc:
+            logger.warning("Sentry disabled: %s", exc)
 
     app.state.rate_limiter = RateLimiter()
     app.state.auth_enabled = auth_enabled
@@ -195,6 +212,46 @@ def create_app() -> FastAPI:
             app.include_router(router, prefix=API_V1_PREFIX)
         except Exception as exc:
             logger.warning("Router '%s' disabled: %s", name, exc)
+
+    prometheus_enabled = os.getenv("PROMETHEUS_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if prometheus_enabled:
+        try:
+            from api.metrics import Metrics
+
+            app.state.metrics = Metrics()
+
+            @app.get(f"{API_V1_PREFIX}/metrics", include_in_schema=False)
+            async def metrics_endpoint(request: Request):
+                metrics = getattr(request.app.state, "metrics", None)
+                if metrics is None:
+                    return PlainTextResponse("", status_code=404)
+
+                body = metrics.render_prometheus()
+                try:
+                    manager = getattr(request.app.state, "t2i_job_manager", None)
+                    if manager is not None and hasattr(manager, "global_counts"):
+                        counts = manager.global_counts()
+                        queued = int(counts.get("queued", 0))
+                        running = int(counts.get("running", 0))
+                        body += (
+                            "# HELP charaforge_t2i_jobs_queued Queued T2I jobs.\n"
+                            "# TYPE charaforge_t2i_jobs_queued gauge\n"
+                            f"charaforge_t2i_jobs_queued {queued}\n"
+                            "# HELP charaforge_t2i_jobs_running Running T2I jobs.\n"
+                            "# TYPE charaforge_t2i_jobs_running gauge\n"
+                            f"charaforge_t2i_jobs_running {running}\n"
+                        )
+                except Exception:
+                    pass
+
+                return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
+        except Exception as exc:
+            logger.warning("Prometheus metrics disabled: %s", exc)
 
     @app.get("/")
     async def root():
@@ -372,6 +429,13 @@ def create_app() -> FastAPI:
         request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
         request.state.request_id = request_id
 
+        metrics = getattr(request.app.state, "metrics", None)
+        if metrics is not None:
+            try:
+                metrics.inc_in_flight()
+            except Exception:
+                pass
+
         try:
             response = await call_next(request)
         except Exception as exc:
@@ -399,16 +463,57 @@ def create_app() -> FastAPI:
         response.headers["X-Process-Time"] = f"{elapsed:.6f}"
 
         try:
+            route = request.scope.get("route")
+            route_path = getattr(route, "path", request.url.path)
+        except Exception:
+            route_path = request.url.path
+
+        if metrics is not None:
+            try:
+                metrics.observe_request(
+                    method=request.method,
+                    route=str(route_path),
+                    status_code=int(response.status_code),
+                    duration_s=elapsed,
+                )
+            except Exception:
+                pass
+            try:
+                metrics.dec_in_flight()
+            except Exception:
+                pass
+
+        try:
             role = getattr(request.state, "auth_role", "unknown")
-            logger.info(
-                "request request_id=%s method=%s path=%s status=%s latency_ms=%s auth_role=%s",
-                request_id,
-                request.method,
-                request.url.path,
-                response.status_code,
-                int(elapsed * 1000),
-                role,
-            )
+            api_key_id = getattr(request.state, "api_key_id", None)
+            if json_logs:
+                logger.info(
+                    json.dumps(
+                        {
+                            "event": "request",
+                            "request_id": request_id,
+                            "method": request.method,
+                            "path": request.url.path,
+                            "route": str(route_path),
+                            "status": int(response.status_code),
+                            "latency_ms": int(elapsed * 1000),
+                            "auth_role": role,
+                            "api_key_id": api_key_id,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            else:
+                logger.info(
+                    "request request_id=%s method=%s path=%s status=%s latency_ms=%s auth_role=%s api_key_id=%s",
+                    request_id,
+                    request.method,
+                    request.url.path,
+                    response.status_code,
+                    int(elapsed * 1000),
+                    role,
+                    api_key_id,
+                )
         except Exception:
             pass
 

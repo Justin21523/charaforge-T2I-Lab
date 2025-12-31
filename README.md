@@ -115,6 +115,12 @@ curl -s -X POST http://localhost:8000/api/v1/auth/keys \\
 - All 4xx/5xx return `{ "error": "...", "message": "...", "details": { ... }, "request_id": "..." }`.
 - Every response includes `X-Request-ID` (send it in the request to propagate your own id).
 
+### Monitoring (Optional)
+
+- JSON request logs: set `LOG_JSON=true`.
+- Prometheus: set `PROMETHEUS_ENABLED=true` to expose `GET /api/v1/metrics` (uses in-process counters).
+- Sentry: set `SENTRY_DSN` (requires `sentry-sdk` installed in your environment).
+
 ## Docker
 
 ```bash
