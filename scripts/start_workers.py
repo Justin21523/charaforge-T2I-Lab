@@ -79,7 +79,7 @@ def start_flower(port=5555):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SagaForge Workers Manager")
+    parser = argparse.ArgumentParser(description="CharaForge Workers Manager")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Worker command

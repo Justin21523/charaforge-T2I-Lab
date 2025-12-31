@@ -1,7 +1,7 @@
 {
-  "name": "sagaforge-t2i-react",
+  "name": "charaforge-t2i-react",
   "version": "1.0.0",
-  "description": "SagaForge T2I Lab - React Frontend",
+  "description": "CharaForge T2I Lab - React Frontend",
   "private": true,
   "scripts": {
     "dev": "vite",

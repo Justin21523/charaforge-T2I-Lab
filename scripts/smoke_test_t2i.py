@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SagaForge T2I System Smoke Test
+CharaForge T2I System Smoke Test
 驗證所有 T2I 核心功能是否正常運作
 """
 
@@ -50,7 +50,7 @@ class T2ISmokeTest:
 
     def run_all_tests(self) -> Dict[str, Any]:
         """執行所有測試"""
-        print("🧪 Starting SagaForge T2I Smoke Tests...")
+        print("🧪 Starting CharaForge T2I Smoke Tests...")
         print("=" * 60)
 
         # Core system tests
@@ -414,7 +414,7 @@ def main():
     """主函數"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="SagaForge T2I System Smoke Test")
+    parser = argparse.ArgumentParser(description="CharaForge T2I System Smoke Test")
     parser.add_argument(
         "--api-url",
         default="http://localhost:8000",
@@ -568,7 +568,7 @@ def test_installation():
 
 if __name__ == "__main__":
     # Quick installation test first
-    print("🚀 SagaForge T2I System Smoke Test")
+    print("🚀 CharaForge T2I System Smoke Test")
     print("=" * 60)
 
     installation_ok = test_installation()

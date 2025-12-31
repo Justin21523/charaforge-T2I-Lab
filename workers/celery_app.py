@@ -57,7 +57,7 @@ def get_celery_config():
 config = get_celery_config()
 
 # Create Celery app
-celery_app = Celery("sagaforge_workers")
+celery_app = Celery("charaforge_workers")
 
 # Basic configuration
 celery_app.conf.update(

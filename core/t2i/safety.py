@@ -743,7 +743,7 @@ class SafetyChecker:
             }
 
     def add_text_watermark(
-        self, image: Image.Image, text: str = "SagaForge T2I"
+        self, image: Image.Image, text: str = "CharaForge T2I"
     ) -> Image.Image:
         """添加文字浮水印 - 新增缺失方法"""
         try:
