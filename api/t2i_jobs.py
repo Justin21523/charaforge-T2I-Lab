@@ -253,9 +253,16 @@ class _MemoryJob:
 
 
 class _MemoryBackend:
-    def __init__(self, *, max_jobs: int = 200, worker_enabled: bool = True):
+    def __init__(
+        self,
+        *,
+        max_jobs: int = 200,
+        worker_enabled: bool = True,
+        max_global_concurrent: int = 0,
+    ):
         self._max_jobs = max_jobs
         self._worker_enabled = bool(worker_enabled)
+        self._max_global_concurrent = int(max_global_concurrent)
         self._lock = threading.Lock()
         self._jobs: Dict[str, _MemoryJob] = {}
         self._queue: queue.Queue[str] = queue.Queue()
@@ -317,6 +324,17 @@ class _MemoryBackend:
         with self._lock:
             job = self._jobs.get(job_id)
             return str(job.owner) if job else None
+
+    def global_counts(self) -> Dict[str, int]:
+        with self._lock:
+            queued = 0
+            running = 0
+            for job in self._jobs.values():
+                if job.status == "queued":
+                    queued += 1
+                elif job.status == "running":
+                    running += 1
+            return {"queued": queued, "running": running}
 
     def owner_counts(self, owner: str) -> Dict[str, int]:
         with self._lock:
@@ -420,6 +438,7 @@ class _RedisBackend:
         stale_seconds: int = 600,
         max_attempts: int = 2,
         max_concurrent_per_owner: int = 1,
+        max_global_concurrent: int = 0,
         worker_enabled: bool = True,
     ):
         if redis is None:
@@ -431,6 +450,7 @@ class _RedisBackend:
         self._stale_seconds = int(stale_seconds)
         self._max_attempts = int(max_attempts)
         self._max_concurrent_per_owner = int(max_concurrent_per_owner)
+        self._max_global_concurrent = int(max_global_concurrent)
         self._worker_enabled = bool(worker_enabled)
 
         self._worker_id = uuid.uuid4().hex
@@ -552,6 +572,65 @@ class _RedisBackend:
         except Exception:
             return {"queued": 0, "running": 0}
 
+    def global_counts(self) -> Dict[str, int]:
+        try:
+            pipe = self._client.pipeline()
+            pipe.llen(self._queue_key())
+            pipe.llen(self._processing_key())
+            queued, processing = pipe.execute()
+            return {"queued": int(queued or 0), "running": int(processing or 0)}
+        except Exception:
+            return {"queued": 0, "running": 0}
+
+    def _requeue_processing(self, job_id: str) -> None:
+        try:
+            pipe = self._client.pipeline()
+            pipe.lrem(self._processing_key(), 0, job_id)
+            pipe.rpush(self._queue_key(), job_id)
+            pipe.execute()
+        except Exception:
+            try:
+                self._client.rpush(self._queue_key(), job_id)
+            except Exception:
+                pass
+            try:
+                self._client.lrem(self._processing_key(), 0, job_id)
+            except Exception:
+                pass
+        time.sleep(0.25)
+
+    def _slot_key(self, index: int) -> str:
+        return f"{self._namespace}:gpu_slot:{index}"
+
+    def _acquire_global_slot(self, job_id: str) -> Tuple[bool, str | None]:
+        if self._max_global_concurrent <= 0:
+            return True, None
+
+        ttl = max(600, self._stale_seconds * 3)
+        try:
+            for index in range(1, self._max_global_concurrent + 1):
+                key = self._slot_key(index)
+                acquired = self._client.set(key, job_id, nx=True, ex=ttl)
+                if acquired:
+                    return True, key
+        except Exception:
+            return True, None
+        return False, None
+
+    def _release_global_slot(self, slot_key: str, job_id: str) -> None:
+        if not slot_key:
+            return
+        try:
+            self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                slot_key,
+                job_id,
+            )
+        except Exception:
+            return
+
     def _worker_loop(self) -> None:
         next_requeue = 0.0
         while not self._stop_event.is_set():
@@ -605,95 +684,90 @@ class _RedisBackend:
                 running_now = 0
 
             if running_now >= self._max_concurrent_per_owner:
-                try:
-                    pipe = self._client.pipeline()
-                    pipe.lrem(self._processing_key(), 0, job_id)
-                    pipe.rpush(self._queue_key(), job_id)
-                    pipe.execute()
-                except Exception:
-                    try:
-                        self._client.rpush(self._queue_key(), job_id)
-                    except Exception:
-                        pass
-                    try:
-                        self._client.lrem(self._processing_key(), 0, job_id)
-                    except Exception:
-                        pass
-                time.sleep(0.25)
+                self._requeue_processing(job_id)
                 return
 
-        record["status"] = "running"
-        record["started_at"] = time.time()
-        record["updated_at"] = time.time()
-        record["progress_step"] = 0
-        record["progress_total"] = int(record.get("progress_total") or 0)
-
-        self._save_job(job_id, record)
-
-        if owner:
-            pipe = self._client.pipeline()
-            pipe.srem(self._owner_queued_key(owner), job_id)
-            pipe.sadd(self._owner_running_key(owner), job_id)
-            pipe.execute()
-
-        cancel_event = threading.Event()
-
-        def _on_progress(step: int, total: int) -> None:
-            if self._is_cancel_requested(job_id):
-                cancel_event.set()
-
-            record_update = self._load_job(job_id) or {}
-            if record_update.get("status") != "running":
-                return
-            record_update["progress_step"] = int(step)
-            record_update["progress_total"] = int(total)
-            record_update["updated_at"] = time.time()
-            self._save_job(job_id, record_update)
+        slot_allowed, slot_key = self._acquire_global_slot(job_id)
+        if not slot_allowed:
+            self._requeue_processing(job_id)
+            return
 
         try:
-            req_payload = record.get("request") or {}
-            req = GenerateRequest.model_validate(req_payload)
-            result = run_generate_sync(
-                req,
-                job_id,
-                cancel_event=cancel_event,
-                on_progress=_on_progress,
-            )
-        except GenerationCancelledError:
-            final = self._load_job(job_id) or record
-            final["status"] = "canceled"
-            final["finished_at"] = time.time()
-            final["updated_at"] = time.time()
-            final["cancel_requested"] = True
-            final["error"] = {"error": "CANCELED", "message": "Canceled"}
-            self._save_job(job_id, final)
-        except Exception as exc:
-            final = self._load_job(job_id) or record
-            final["status"] = "failed"
-            final["finished_at"] = time.time()
-            final["updated_at"] = time.time()
-            final["error"] = {"error": "GENERATION_FAILED", "message": str(exc)}
-            self._save_job(job_id, final)
-        else:
-            final = self._load_job(job_id) or record
-            final["status"] = "succeeded"
-            final["finished_at"] = time.time()
-            final["updated_at"] = time.time()
-            final["seed"] = int(result.get("seed", 0))
-            final["elapsed_ms"] = int(result.get("elapsed_ms", 0))
-            final["metadata"] = result.get("metadata") or {}
-            final["saved_paths"] = list(result.get("saved_paths") or [])
-            final["error"] = None
-            self._save_job(job_id, final)
+            record["status"] = "running"
+            record["started_at"] = time.time()
+            record["updated_at"] = time.time()
+            record["progress_step"] = 0
+            record["progress_total"] = int(record.get("progress_total") or 0)
 
-        if owner:
-            pipe = self._client.pipeline()
-            pipe.srem(self._owner_queued_key(owner), job_id)
-            pipe.srem(self._owner_running_key(owner), job_id)
-            pipe.execute()
+            self._save_job(job_id, record)
 
-        self._client.delete(self._cancel_key(job_id))
-        self._cleanup_processing(job_id)
+            if owner:
+                pipe = self._client.pipeline()
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.sadd(self._owner_running_key(owner), job_id)
+                pipe.execute()
+
+            cancel_event = threading.Event()
+
+            def _on_progress(step: int, total: int) -> None:
+                if self._is_cancel_requested(job_id):
+                    cancel_event.set()
+
+                record_update = self._load_job(job_id) or {}
+                if record_update.get("status") != "running":
+                    return
+                record_update["progress_step"] = int(step)
+                record_update["progress_total"] = int(total)
+                record_update["updated_at"] = time.time()
+                self._save_job(job_id, record_update)
+
+            try:
+                req_payload = record.get("request") or {}
+                req = GenerateRequest.model_validate(req_payload)
+                result = run_generate_sync(
+                    req,
+                    job_id,
+                    cancel_event=cancel_event,
+                    on_progress=_on_progress,
+                )
+            except GenerationCancelledError:
+                final = self._load_job(job_id) or record
+                final["status"] = "canceled"
+                final["finished_at"] = time.time()
+                final["updated_at"] = time.time()
+                final["cancel_requested"] = True
+                final["error"] = {"error": "CANCELED", "message": "Canceled"}
+                self._save_job(job_id, final)
+            except Exception as exc:
+                final = self._load_job(job_id) or record
+                final["status"] = "failed"
+                final["finished_at"] = time.time()
+                final["updated_at"] = time.time()
+                final["error"] = {"error": "GENERATION_FAILED", "message": str(exc)}
+                self._save_job(job_id, final)
+            else:
+                final = self._load_job(job_id) or record
+                final["status"] = "succeeded"
+                final["finished_at"] = time.time()
+                final["updated_at"] = time.time()
+                final["seed"] = int(result.get("seed", 0))
+                final["elapsed_ms"] = int(result.get("elapsed_ms", 0))
+                final["metadata"] = result.get("metadata") or {}
+                final["saved_paths"] = list(result.get("saved_paths") or [])
+                final["error"] = None
+                self._save_job(job_id, final)
+
+            if owner:
+                pipe = self._client.pipeline()
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.srem(self._owner_running_key(owner), job_id)
+                pipe.execute()
+
+            self._client.delete(self._cancel_key(job_id))
+            self._cleanup_processing(job_id)
+        finally:
+            if slot_key:
+                self._release_global_slot(slot_key, job_id)
 
     def _requeue_stale(self) -> None:
         lock_key = f"{self._namespace}:reaper_lock"
@@ -830,6 +904,7 @@ class T2IJobManager:
         stale_seconds: int = 600,
         max_attempts: int = 2,
         max_concurrent_per_owner: int = 1,
+        max_global_concurrent: int = 0,
     ):
         self._backend: _MemoryBackend | _RedisBackend
 
@@ -841,6 +916,7 @@ class T2IJobManager:
                     stale_seconds=stale_seconds,
                     max_attempts=max_attempts,
                     max_concurrent_per_owner=max_concurrent_per_owner,
+                    max_global_concurrent=max_global_concurrent,
                     worker_enabled=worker_enabled,
                 )
                 if candidate.ping():
@@ -851,7 +927,9 @@ class T2IJobManager:
             except Exception as exc:
                 logger.warning("Redis unavailable; falling back to in-memory T2I jobs: %s", exc)
 
-        self._backend = _MemoryBackend(worker_enabled=worker_enabled)
+        self._backend = _MemoryBackend(
+            worker_enabled=worker_enabled, max_global_concurrent=max_global_concurrent
+        )
         if worker_enabled:
             self._backend.start()
 
@@ -872,3 +950,6 @@ class T2IJobManager:
 
     def owner_counts(self, owner: str) -> Dict[str, int]:
         return self._backend.owner_counts(owner)
+
+    def global_counts(self) -> Dict[str, int]:
+        return self._backend.global_counts()

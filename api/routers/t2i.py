@@ -200,6 +200,24 @@ async def submit(req: GenerateRequest, request: Request):
                 },
             )
 
+    max_global_queue = int(get_settings().api.t2i_max_global_queue or 0)
+    if max_global_queue > 0:
+        counts = manager.global_counts()
+        active = int(counts.get("queued", 0)) + int(counts.get("running", 0))
+        if active >= max_global_queue:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "T2I_GLOBAL_QUEUE_FULL",
+                    "message": "T2I service is busy",
+                    "details": {
+                        "max_global_queue": max_global_queue,
+                        "queued": int(counts.get("queued", 0)),
+                        "running": int(counts.get("running", 0)),
+                    },
+                },
+            )
+
     job_id = manager.submit(req, owner=owner)
     write_access_meta(job_id, owner=owner)
     base = str(request.base_url).rstrip("/")

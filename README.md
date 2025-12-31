@@ -88,6 +88,7 @@ npm run dev
 - Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
 - Bucket limits: `API_UPLOAD_RATE_LIMIT` and `API_DATASETS_RATE_LIMIT` (requests/minute, 0 disables).
 - Cost-based throttles: `API_T2I_COST_RATE_LIMIT` (cost units/minute, 0 disables).
+- T2I queue/concurrency: per-owner `API_T2I_MAX_CONCURRENT`/`API_T2I_MAX_QUEUE`, global `API_T2I_MAX_GLOBAL_CONCURRENT`/`API_T2I_MAX_GLOBAL_QUEUE`.
 - Frontend: set the API key in the header UI (stored in localStorage) instead of baking it into build env vars.
 
 ### Managed API Keys (`/api/v1/auth/*`)

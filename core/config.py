@@ -246,6 +246,18 @@ class APIConfig(BaseSettings):
             "T2I_IMAGE_TOKEN_TTL_SECONDS", "API_T2I_IMAGE_TOKEN_TTL_SECONDS"
         ),
     )
+    t2i_max_global_concurrent: int = Field(
+        default=1,
+        ge=0,
+        validation_alias=AliasChoices(
+            "T2I_MAX_GLOBAL_CONCURRENT", "API_T2I_MAX_GLOBAL_CONCURRENT"
+        ),
+    )
+    t2i_max_global_queue: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("T2I_MAX_GLOBAL_QUEUE", "API_T2I_MAX_GLOBAL_QUEUE"),
+    )
     t2i_max_concurrent: int = Field(
         default=1, ge=0, validation_alias=AliasChoices("T2I_MAX_CONCURRENT", "API_T2I_MAX_CONCURRENT")
     )

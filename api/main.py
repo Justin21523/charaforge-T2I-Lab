@@ -165,6 +165,7 @@ def create_app() -> FastAPI:
             stale_seconds=int(settings.api.t2i_job_stale_seconds or 0),
             max_attempts=int(settings.api.t2i_job_max_attempts or 1),
             max_concurrent_per_owner=int(settings.api.t2i_max_concurrent or 1),
+            max_global_concurrent=int(settings.api.t2i_max_global_concurrent or 0),
         )
     except Exception as exc:
         logger.warning("T2I async jobs disabled: %s", exc)
