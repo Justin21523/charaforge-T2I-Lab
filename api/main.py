@@ -106,7 +106,13 @@ def create_app() -> FastAPI:
     try:
         from api.t2i_jobs import T2IJobManager
 
-        app.state.t2i_job_manager = T2IJobManager()
+        app.state.t2i_job_manager = T2IJobManager(
+            redis_url=app.state.redis_url,
+            worker_enabled=bool(settings.api.t2i_worker_enabled),
+            job_ttl_seconds=int(settings.api.t2i_job_ttl_seconds or 0),
+            stale_seconds=int(settings.api.t2i_job_stale_seconds or 0),
+            max_attempts=int(settings.api.t2i_job_max_attempts or 1),
+        )
     except Exception as exc:
         logger.warning("T2I async jobs disabled: %s", exc)
 
@@ -154,13 +160,14 @@ def create_app() -> FastAPI:
         presented = extract_api_key(request, header_name)
         role = get_api_key_role(presented, admin_keys=admin_keys, user_keys=user_keys)
         request.state.auth_role = role or "anonymous"
+        request.state.client_key = get_client_key(request, api_key=presented if role else None)
 
         rate_limit = int(
             (settings.api.scan_rate_limit if is_scan_request else settings.api.rate_limit) or 0
         )
         rate_result = None
         if rate_limit > 0:
-            rate_client_key = get_client_key(request, api_key=presented if role else None)
+            rate_client_key = request.state.client_key
             bucket = "models_scan" if is_scan_request else "default"
             rate_result = app.state.rate_limiter.check(
                 key=f"{bucket}:{rate_client_key}",

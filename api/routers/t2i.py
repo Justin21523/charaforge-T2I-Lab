@@ -31,7 +31,7 @@ def _job_manager(request: Request) -> T2IJobManager:
     manager = getattr(request.app.state, "t2i_job_manager", None)
     if isinstance(manager, T2IJobManager):
         return manager
-    manager = T2IJobManager()
+    manager = T2IJobManager(redis_url=getattr(request.app.state, "redis_url", None))
     request.app.state.t2i_job_manager = manager
     return manager
 
@@ -72,7 +72,8 @@ async def submit(req: GenerateRequest, request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     manager = _job_manager(request)
-    job_id = manager.submit(req)
+    owner = getattr(request.state, "client_key", "ip:unknown")
+    job_id = manager.submit(req, owner=owner)
     base = str(request.base_url).rstrip("/")
     return SubmitResponse(
         status="queued",

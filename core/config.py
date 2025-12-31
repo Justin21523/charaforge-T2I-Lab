@@ -226,6 +226,20 @@ class APIConfig(BaseSettings):
         default=5, ge=0, validation_alias=AliasChoices("SCAN_RATE_LIMIT", "API_SCAN_RATE_LIMIT")
     )
 
+    # Async T2I job settings
+    t2i_worker_enabled: bool = Field(
+        default=True, validation_alias=AliasChoices("T2I_WORKER_ENABLED", "API_T2I_WORKER_ENABLED")
+    )
+    t2i_job_ttl_seconds: int = Field(
+        default=86400, ge=0, validation_alias=AliasChoices("T2I_JOB_TTL_SECONDS", "API_T2I_JOB_TTL_SECONDS")
+    )
+    t2i_job_stale_seconds: int = Field(
+        default=600, ge=0, validation_alias=AliasChoices("T2I_JOB_STALE_SECONDS", "API_T2I_JOB_STALE_SECONDS")
+    )
+    t2i_job_max_attempts: int = Field(
+        default=2, ge=1, validation_alias=AliasChoices("T2I_JOB_MAX_ATTEMPTS", "API_T2I_JOB_MAX_ATTEMPTS")
+    )
+
     # File uploads
     max_file_size_mb: int = Field(default=50, ge=1, le=500)
     allowed_extensions: str = Field(default=".jpg,.jpeg,.png,.webp")
