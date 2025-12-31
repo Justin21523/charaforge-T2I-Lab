@@ -16,7 +16,7 @@ import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from api.security import get_api_key_role, parse_api_keys
+from api.security import parse_api_keys, resolve_api_key
 from core.config import get_settings
 
 router = APIRouter(prefix="/ws", tags=["ws"])
@@ -40,7 +40,15 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     if settings.api.api_key:
         admin_keys.add(settings.api.api_key)
 
-    auth_enabled = bool(admin_keys or user_keys)
+    api_key_store = None
+    try:
+        from api.key_store import APIKeyStore
+
+        api_key_store = APIKeyStore.default()
+    except Exception:
+        api_key_store = None
+
+    auth_enabled = bool(admin_keys or user_keys or (api_key_store and api_key_store.has_active_keys()))
     if auth_enabled:
         header_name = settings.api.key_header or "X-API-Key"
         presented = (
@@ -48,8 +56,13 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
             or websocket.query_params.get("api_key")
             or websocket.query_params.get("token")
         )
-        role = get_api_key_role(presented, admin_keys=admin_keys, user_keys=user_keys)
-        if not role:
+        auth = resolve_api_key(
+            presented,
+            admin_keys=admin_keys,
+            user_keys=user_keys,
+            key_store=api_key_store,
+        )
+        if not auth:
             await websocket.accept()
             await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
             await websocket.close(code=4401)

@@ -24,10 +24,10 @@ from api.routers.health import router as health_router
 from api.security import (
     RateLimiter,
     extract_api_key,
-    get_api_key_role,
     get_client_key,
     is_exempt_v1_request,
     parse_api_keys,
+    resolve_api_key,
 )
 from core.config import bootstrap_config, get_settings
 from core.exceptions import CharaForgeError
@@ -85,7 +85,16 @@ def create_app() -> FastAPI:
     user_keys = parse_api_keys(settings.api.api_keys)
     if settings.api.api_key:
         admin_keys.add(settings.api.api_key)
-    auth_enabled = bool(admin_keys or user_keys)
+    api_key_store = None
+    try:
+        from api.key_store import APIKeyStore
+
+        api_key_store = APIKeyStore.default()
+    except Exception as exc:
+        logger.warning("API key store unavailable: %s", exc)
+
+    store_enabled = bool(api_key_store and api_key_store.has_active_keys())
+    auth_enabled = bool(admin_keys or user_keys or store_enabled)
 
     app = FastAPI(
         title="CharaForge T2I Lab",
@@ -103,6 +112,7 @@ def create_app() -> FastAPI:
         or settings.redis_url
         or settings.celery.broker_url
     )
+    app.state.api_key_store = api_key_store
     try:
         from api.t2i_jobs import T2IJobManager
 
@@ -123,6 +133,7 @@ def create_app() -> FastAPI:
 
     optional_routers = [
         ("models", "api.routers.models", "router"),
+        ("auth", "api.routers.auth", "router"),
         ("t2i", "api.routers.t2i", "router"),
         ("controlnet", "api.routers.controlnet", "router"),
         ("lora", "api.routers.lora", "router"),
@@ -158,9 +169,17 @@ def create_app() -> FastAPI:
 
         is_scan_request = path == f"{API_V1_PREFIX}/models/scan"
         presented = extract_api_key(request, header_name)
-        role = get_api_key_role(presented, admin_keys=admin_keys, user_keys=user_keys)
+        auth = resolve_api_key(
+            presented,
+            admin_keys=admin_keys,
+            user_keys=user_keys,
+            key_store=api_key_store,
+        )
+        role = auth.role if auth else None
         request.state.auth_role = role or "anonymous"
-        request.state.client_key = get_client_key(request, api_key=presented if role else None)
+        request.state.auth_scopes = auth.scopes if auth else set()
+        request.state.api_key_id = auth.key_id if auth else None
+        request.state.client_key = get_client_key(request, api_key=presented if auth else None)
 
         rate_limit = int(
             (settings.api.scan_rate_limit if is_scan_request else settings.api.rate_limit) or 0
@@ -197,7 +216,7 @@ def create_app() -> FastAPI:
                 )
 
         if auth_enabled:
-            if not role:
+            if not auth:
                 return JSONResponse(
                     status_code=401,
                     content=_error_payload(

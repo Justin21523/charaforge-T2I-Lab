@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import Request
 
@@ -43,16 +43,54 @@ def parse_api_keys(value: str | None) -> set[str]:
     return keys
 
 
-def get_api_key_role(
-    presented: str | None, *, admin_keys: set[str], user_keys: set[str]
-) -> Optional[str]:
+if TYPE_CHECKING:
+    from api.key_store import APIKeyStore
+
+
+@dataclass(frozen=True)
+class APIKeyAuth:
+    role: str
+    scopes: set[str]
+    key_id: Optional[str] = None
+    source: str = "env"
+
+
+def resolve_api_key(
+    presented: str | None,
+    *,
+    admin_keys: set[str],
+    user_keys: set[str],
+    key_store: "APIKeyStore | None" = None,
+) -> Optional[APIKeyAuth]:
     if not presented:
         return None
     if presented in admin_keys:
-        return "admin"
+        return APIKeyAuth(role="admin", scopes={"*"}, key_id=None, source="env")
     if presented in user_keys:
-        return "user"
+        return APIKeyAuth(role="user", scopes=set(), key_id=None, source="env")
+    if key_store is not None:
+        verified = key_store.verify(presented)
+        if verified:
+            return APIKeyAuth(
+                role=str(verified.role),
+                scopes=set(verified.scopes),
+                key_id=str(verified.key_id),
+                source="store",
+            )
     return None
+
+
+def get_api_key_role(
+    presented: str | None,
+    *,
+    admin_keys: set[str],
+    user_keys: set[str],
+    key_store: "APIKeyStore | None" = None,
+) -> Optional[str]:
+    resolved = resolve_api_key(
+        presented, admin_keys=admin_keys, user_keys=user_keys, key_store=key_store
+    )
+    return resolved.role if resolved else None
 
 
 def get_client_key(request: Request, api_key: str | None = None) -> str:
