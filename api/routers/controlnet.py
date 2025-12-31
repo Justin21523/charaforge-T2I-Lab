@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import secrets
 import time
 import uuid
@@ -18,11 +19,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from api.file_stream import stream_file
 from api.t2i_cost import estimate_t2i_cost
+from api.t2i_tokens import make_image_token, verify_image_token
 from core.config import get_app_paths, get_settings
 from core.t2i.pipeline import PIPELINE_LOCK, GenerationParams, get_pipeline_manager
 
@@ -176,6 +178,52 @@ def _job_dir(job_id: str) -> Path:
     return app_paths.outputs / "controlnet" / job_id
 
 
+def _access_meta_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "_access.json"
+
+
+def _write_access_meta(job_id: str, *, owner: str) -> None:
+    if not job_id or not owner:
+        return
+    path = _access_meta_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"job_id": job_id, "owner": owner, "created_at": time.time()}
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        return
+
+
+def _read_access_owner(job_id: str) -> str | None:
+    path = _access_meta_path(job_id)
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    owner = data.get("owner")
+    return str(owner) if owner else None
+
+
+def _is_admin(request: Request) -> bool:
+    return getattr(request.state, "auth_role", "anonymous") == "admin"
+
+
+def _image_url(request: Request, *, job_id: str, filename: str, owner: str) -> str:
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/api/v1/controlnet/images/{job_id}/{filename}"
+    if getattr(request.app.state, "auth_enabled", False):
+        ttl = int(get_settings().api.t2i_image_token_ttl_seconds or 0)
+        token = make_image_token(job_id=job_id, filename=filename, owner=owner, ttl_seconds=ttl)
+        if token:
+            url = f"{url}?img_token={token}"
+    return url
+
+
 def _safe_resolve(path: Path, root: Path) -> Path:
     resolved = path.resolve()
     root_resolved = root.resolve()
@@ -311,13 +359,14 @@ async def generate_controlnet(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     job_id = str(uuid.uuid4())
+    owner = getattr(request.state, "client_key", "ip:unknown")
+    _write_access_meta(job_id, owner=owner)
     payload = await asyncio.to_thread(
         _run_generate_controlnet_sync, req, job_id, control_type, control_image
     )
 
-    base = str(request.base_url).rstrip("/")
     image_urls = [
-        f"{base}/api/v1/controlnet/images/{job_id}/{p.name}"
+        _image_url(request, job_id=job_id, filename=p.name, owner=owner)
         for p in payload["saved_paths"]
         if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
     ]
@@ -333,9 +382,25 @@ async def generate_controlnet(
 
 
 @router.get("/images/{job_id}/{filename}")
-async def get_controlnet_image(job_id: str, filename: str):
+async def get_controlnet_image(
+    job_id: str, filename: str, request: Request, img_token: str | None = None
+):
     if "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
+
+    owner = _read_access_owner(job_id) or ""
+    if not owner:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if not _is_admin(request):
+        client_key = getattr(request.state, "client_key", "ip:unknown")
+        if client_key != owner and not (
+            img_token
+            and verify_image_token(
+                img_token, job_id=job_id, filename=filename, owner=owner
+            )
+        ):
+            raise HTTPException(status_code=403, detail="Forbidden")
 
     root = _job_dir(job_id)
     path = _safe_resolve(root / filename, root)
@@ -348,4 +413,4 @@ async def get_controlnet_image(job_id: str, filename: str):
     elif path.suffix.lower() == ".webp":
         media_type = "image/webp"
 
-    return FileResponse(path=str(path), media_type=media_type, filename=path.name)
+    return stream_file(path, media_type=media_type, filename=path.name, disposition="inline")

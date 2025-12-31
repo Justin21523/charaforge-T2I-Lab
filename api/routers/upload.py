@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
 
+from api.file_stream import stream_file
 from core.config import get_app_paths
 
 router = APIRouter(tags=["upload"])
@@ -73,5 +73,4 @@ async def get_upload(bucket: str, filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(path=str(path), filename=path.name)
-
+    return stream_file(path, media_type="application/octet-stream", filename=path.name, disposition="attachment")

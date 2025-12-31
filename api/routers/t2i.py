@@ -12,11 +12,19 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
 
+from api.file_stream import stream_file
 from api.schemas.t2i import GenerateRequest, GenerateResponse, JobStatusResponse, SubmitResponse
 from api.t2i_cost import estimate_t2i_cost
-from api.t2i_jobs import T2IJobManager, job_dir, run_generate_sync, validate_generate_request
+from api.t2i_jobs import (
+    T2IJobManager,
+    job_dir,
+    read_access_owner,
+    run_generate_sync,
+    validate_generate_request,
+    write_access_meta,
+)
+from api.t2i_tokens import make_image_token, verify_image_token
 from core.config import get_settings
 
 router = APIRouter(prefix="/t2i", tags=["t2i"])
@@ -37,6 +45,40 @@ def _job_manager(request: Request) -> T2IJobManager:
     manager = T2IJobManager(redis_url=getattr(request.app.state, "redis_url", None))
     request.app.state.t2i_job_manager = manager
     return manager
+
+
+def _is_admin(request: Request) -> bool:
+    return getattr(request.state, "auth_role", "anonymous") == "admin"
+
+
+def _job_owner(manager: T2IJobManager, job_id: str) -> str | None:
+    owner = manager.get_owner(job_id)
+    if owner:
+        return owner
+    return read_access_owner(job_id)
+
+
+def _require_job_access(request: Request, manager: T2IJobManager, job_id: str) -> str:
+    owner = _job_owner(manager, job_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if _is_admin(request):
+        return owner
+    client_key = getattr(request.state, "client_key", "ip:unknown")
+    if client_key != owner:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return owner
+
+
+def _image_url(request: Request, *, job_id: str, filename: str, owner: str) -> str:
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/api/v1/t2i/images/{job_id}/{filename}"
+    if getattr(request.app.state, "auth_enabled", False):
+        ttl = int(get_settings().api.t2i_image_token_ttl_seconds or 0)
+        token = make_image_token(job_id=job_id, filename=filename, owner=owner, ttl_seconds=ttl)
+        if token:
+            url = f"{url}?img_token={token}"
+    return url
 
 
 def _enforce_t2i_cost_limit(
@@ -88,6 +130,7 @@ def _enforce_t2i_cost_limit(
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest, request: Request):
     job_id = str(uuid.uuid4())
+    owner = getattr(request.state, "client_key", "ip:unknown")
 
     _enforce_t2i_cost_limit(
         request,
@@ -104,9 +147,9 @@ async def generate(req: GenerateRequest, request: Request):
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    base = str(request.base_url).rstrip("/")
+    write_access_meta(job_id, owner=owner)
     image_urls = [
-        f"{base}/api/v1/t2i/images/{job_id}/{name}"
+        _image_url(request, job_id=job_id, filename=name, owner=owner)
         for name in payload["saved_paths"]
         if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
     ]
@@ -158,6 +201,7 @@ async def submit(req: GenerateRequest, request: Request):
             )
 
     job_id = manager.submit(req, owner=owner)
+    write_access_meta(job_id, owner=owner)
     base = str(request.base_url).rstrip("/")
     return SubmitResponse(
         status="queued",
@@ -170,13 +214,13 @@ async def submit(req: GenerateRequest, request: Request):
 @router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def status(job_id: str, request: Request):
     manager = _job_manager(request)
+    owner = _require_job_access(request, manager, job_id)
     snapshot = manager.get(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    base = str(request.base_url).rstrip("/")
     image_urls = [
-        f"{base}/api/v1/t2i/images/{job_id}/{name}"
+        _image_url(request, job_id=job_id, filename=name, owner=owner)
         for name in snapshot.get("saved_paths") or []
         if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
     ]
@@ -197,13 +241,13 @@ async def status(job_id: str, request: Request):
 @router.post("/cancel/{job_id}", response_model=JobStatusResponse)
 async def cancel(job_id: str, request: Request):
     manager = _job_manager(request)
+    owner = _require_job_access(request, manager, job_id)
     snapshot = manager.cancel(job_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    base = str(request.base_url).rstrip("/")
     image_urls = [
-        f"{base}/api/v1/t2i/images/{job_id}/{name}"
+        _image_url(request, job_id=job_id, filename=name, owner=owner)
         for name in snapshot.get("saved_paths") or []
         if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
     ]
@@ -222,9 +266,26 @@ async def cancel(job_id: str, request: Request):
 
 
 @router.get("/images/{job_id}/{filename}")
-async def get_image(job_id: str, filename: str):
+async def get_image(
+    job_id: str, filename: str, request: Request, img_token: str | None = None
+):
     if "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
+
+    manager = _job_manager(request)
+    owner = _job_owner(manager, job_id) or ""
+    if not owner:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if not _is_admin(request):
+        client_key = getattr(request.state, "client_key", "ip:unknown")
+        if client_key != owner and not (
+            img_token
+            and verify_image_token(
+                img_token, job_id=job_id, filename=filename, owner=owner
+            )
+        ):
+            raise HTTPException(status_code=403, detail="Forbidden")
 
     root = job_dir(job_id)
     path = _safe_resolve(root / filename, root)
@@ -237,4 +298,4 @@ async def get_image(job_id: str, filename: str):
     elif path.suffix.lower() == ".webp":
         media_type = "image/webp"
 
-    return FileResponse(path=str(path), media_type=media_type, filename=path.name)
+    return stream_file(path, media_type=media_type, filename=path.name, disposition="inline")

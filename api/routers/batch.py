@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from api.file_stream import stream_file
 from core.config import get_app_paths, get_settings
 from core.t2i.pipeline import PIPELINE_LOCK, GenerationParams, get_pipeline_manager
 
@@ -278,7 +279,7 @@ async def get_batch_image(job_id: str, task_dir: str, filename: str):
     elif path.suffix.lower() == ".webp":
         media_type = "image/webp"
 
-    return FileResponse(path=str(path), media_type=media_type, filename=path.name)
+    return stream_file(path, media_type=media_type, filename=path.name, disposition="inline")
 
 
 @router.get("/download/{job_id}")
@@ -306,4 +307,3 @@ async def download_batch_zip(job_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="batch_{job_id}.zip"'},
     )
-

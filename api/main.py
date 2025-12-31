@@ -106,6 +106,7 @@ def create_app() -> FastAPI:
     )
 
     app.state.rate_limiter = RateLimiter()
+    app.state.auth_enabled = auth_enabled
     app.state.redis_url = (
         os.getenv("REDIS_URL")
         or os.getenv("CELERY_BROKER_URL")
@@ -169,6 +170,9 @@ def create_app() -> FastAPI:
             return await call_next(request)
 
         is_scan_request = path == f"{API_V1_PREFIX}/models/scan"
+        is_t2i_image_request = path.startswith(f"{API_V1_PREFIX}/t2i/images/")
+        is_controlnet_image_request = path.startswith(f"{API_V1_PREFIX}/controlnet/images/")
+        has_image_token = bool(request.query_params.get("img_token"))
         presented = extract_api_key(request, header_name)
         auth = resolve_api_key(
             presented,
@@ -266,6 +270,8 @@ def create_app() -> FastAPI:
 
         if auth_enabled:
             if not auth:
+                if (is_t2i_image_request or is_controlnet_image_request) and has_image_token:
+                    return await call_next(request)
                 return JSONResponse(
                     status_code=401,
                     content=_error_payload(

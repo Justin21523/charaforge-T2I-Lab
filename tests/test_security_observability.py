@@ -4,6 +4,8 @@ from httpx import ASGITransport
 
 import core.config as config
 from api.main import create_app
+from api.t2i_jobs import read_access_owner
+from api.t2i_tokens import make_image_token
 
 
 def _reset_settings_cache() -> None:
@@ -96,3 +98,55 @@ async def test_error_schema_and_request_id_for_429(make_app):
         _assert_error_schema(second)
         assert second.json()["error"] == "RATE_LIMITED"
 
+
+@pytest.mark.anyio
+async def test_t2i_status_is_owner_only_and_images_accept_token(make_app, tmp_path):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key_1,user_key_2",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "prompt": "test",
+            "model_type": "sd15",
+            "width": 256,
+            "height": 256,
+            "steps": 1,
+            "batch_size": 1,
+        }
+        submit = await client.post("/api/v1/t2i/submit", json=payload, headers={"X-API-Key": "user_key_1"})
+        assert submit.status_code == 200
+        job_id = submit.json()["job_id"]
+
+        forbidden = await client.get(f"/api/v1/t2i/status/{job_id}", headers={"X-API-Key": "user_key_2"})
+        assert forbidden.status_code == 403
+        _assert_error_schema(forbidden)
+
+        ok = await client.get(f"/api/v1/t2i/status/{job_id}", headers={"X-API-Key": "user_key_1"})
+        assert ok.status_code == 200
+
+        owner = read_access_owner(job_id)
+        assert owner
+
+        token = make_image_token(job_id=job_id, filename="dummy.png", owner=owner, ttl_seconds=3600)
+        assert token
+
+        # No API key header (simulates <img>), should still work with a token.
+        # The file doesn't exist in this unit test environment; passing the token should
+        # get past auth/ACL and return 404 (not 401/403).
+        img = await client.get(
+            f"/api/v1/t2i/images/{job_id}/dummy.png", params={"img_token": token}
+        )
+        assert img.status_code == 404
+        _assert_error_schema(img)
+
+        bad = await client.get(
+            f"/api/v1/t2i/images/{job_id}/dummy.png", params={"img_token": token + "x"}
+        )
+        assert bad.status_code == 403
+        _assert_error_schema(bad)

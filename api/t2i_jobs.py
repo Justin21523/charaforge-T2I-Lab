@@ -25,6 +25,7 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+ACCESS_META_FILENAME = "_access.json"
 
 
 class GenerationCancelledError(RuntimeError):
@@ -34,6 +35,37 @@ class GenerationCancelledError(RuntimeError):
 def job_dir(job_id: str) -> Path:
     app_paths = get_app_paths()
     return app_paths.outputs / "t2i" / job_id
+
+
+def access_meta_path(job_id: str) -> Path:
+    return job_dir(job_id) / ACCESS_META_FILENAME
+
+
+def write_access_meta(job_id: str, *, owner: str) -> None:
+    if not job_id or not owner:
+        return
+    path = access_meta_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"job_id": job_id, "owner": owner, "created_at": time.time()}
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        return
+
+
+def read_access_owner(job_id: str) -> str | None:
+    path = access_meta_path(job_id)
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    owner = data.get("owner")
+    return str(owner) if owner else None
 
 
 def _pick_model_id(req: GenerateRequest) -> str:
@@ -221,8 +253,9 @@ class _MemoryJob:
 
 
 class _MemoryBackend:
-    def __init__(self, *, max_jobs: int = 200):
+    def __init__(self, *, max_jobs: int = 200, worker_enabled: bool = True):
         self._max_jobs = max_jobs
+        self._worker_enabled = bool(worker_enabled)
         self._lock = threading.Lock()
         self._jobs: Dict[str, _MemoryJob] = {}
         self._queue: queue.Queue[str] = queue.Queue()
@@ -230,6 +263,8 @@ class _MemoryBackend:
         self._worker: Optional[threading.Thread] = None
 
     def start(self) -> None:
+        if not self._worker_enabled:
+            return
         if self._worker and self._worker.is_alive():
             return
         self._stop_event.clear()
@@ -277,6 +312,11 @@ class _MemoryBackend:
         with self._lock:
             job = self._jobs.get(job_id)
             return _snapshot_from_record(job.to_record()) if job else None
+
+    def get_owner(self, job_id: str) -> str | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return str(job.owner) if job else None
 
     def owner_counts(self, owner: str) -> Dict[str, int]:
         with self._lock:
@@ -492,6 +532,13 @@ class _RedisBackend:
     def get(self, job_id: str) -> Dict[str, Any] | None:
         record = self._load_job(job_id)
         return _snapshot_from_record(record) if record else None
+
+    def get_owner(self, job_id: str) -> str | None:
+        record = self._load_job(job_id)
+        if record is None:
+            return None
+        owner = record.get("owner")
+        return str(owner) if owner else None
 
     def owner_counts(self, owner: str) -> Dict[str, int]:
         if not owner:
@@ -804,7 +851,7 @@ class T2IJobManager:
             except Exception as exc:
                 logger.warning("Redis unavailable; falling back to in-memory T2I jobs: %s", exc)
 
-        self._backend = _MemoryBackend()
+        self._backend = _MemoryBackend(worker_enabled=worker_enabled)
         if worker_enabled:
             self._backend.start()
 
@@ -819,6 +866,9 @@ class T2IJobManager:
 
     def get(self, job_id: str) -> Dict[str, Any] | None:
         return self._backend.get(job_id)
+
+    def get_owner(self, job_id: str) -> str | None:
+        return self._backend.get_owner(job_id)
 
     def owner_counts(self, owner: str) -> Dict[str, int]:
         return self._backend.owner_counts(owner)
