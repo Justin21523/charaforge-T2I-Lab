@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -30,15 +32,42 @@ def is_exempt_v1_request(request: Request) -> bool:
     return request.url.path in _EXEMPT_V1_PATHS
 
 
-def get_client_key(request: Request) -> str:
+def parse_api_keys(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    keys: set[str] = set()
+    for candidate in re.split(r"[,\s]+", value):
+        key = candidate.strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def get_api_key_role(
+    presented: str | None, *, admin_keys: set[str], user_keys: set[str]
+) -> Optional[str]:
+    if not presented:
+        return None
+    if presented in admin_keys:
+        return "admin"
+    if presented in user_keys:
+        return "user"
+    return None
+
+
+def get_client_key(request: Request, api_key: str | None = None) -> str:
+    if api_key:
+        digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:32]
+        return f"key:{digest}"
+
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         candidate = forwarded.split(",")[0].strip()
         if candidate:
-            return candidate
+            return f"ip:{candidate}"
     if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+        return f"ip:{request.client.host}"
+    return "ip:unknown"
 
 
 def extract_api_key(request: Request, header_name: str) -> Optional[str]:

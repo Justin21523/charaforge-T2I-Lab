@@ -218,8 +218,13 @@ class APIConfig(BaseSettings):
     # CORS and security
     cors_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000")
     api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("KEY", "API_KEY"))
+    api_keys: str = Field(default="", validation_alias=AliasChoices("KEYS", "API_KEYS"))
+    api_admin_keys: str = Field(default="", validation_alias=AliasChoices("ADMIN_KEYS", "API_ADMIN_KEYS"))
     key_header: str = Field(default="X-API-Key")
     rate_limit: int = Field(default=100, ge=0)  # requests per minute (0 disables)
+    scan_rate_limit: int = Field(
+        default=5, ge=0, validation_alias=AliasChoices("SCAN_RATE_LIMIT", "API_SCAN_RATE_LIMIT")
+    )
 
     # File uploads
     max_file_size_mb: int = Field(default=50, ge=1, le=500)
