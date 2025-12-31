@@ -67,7 +67,7 @@ npm run dev
 ## API (Base Prefix: `/api/v1`)
 
 - Health: `GET /api/v1/health`
-- T2I: `POST /api/v1/t2i/generate`
+- T2I: `POST /api/v1/t2i/generate`, `POST /api/v1/t2i/submit`, `GET /api/v1/t2i/status/{job_id}`, `POST /api/v1/t2i/cancel/{job_id}`
 - ControlNet: `POST /api/v1/controlnet/{pose|depth|canny|lineart}`
 - LoRA: `GET /api/v1/lora/list`, `POST /api/v1/lora/load`, `POST /api/v1/lora/unload`
 - Batch: `POST /api/v1/batch/submit`, `GET /api/v1/batch/status/{job_id}`, `GET /api/v1/batch/download/{job_id}`
@@ -77,9 +77,16 @@ npm run dev
 
 ### Auth + Rate Limiting (Optional)
 
-- Set `API_KEY` (and optionally `API_KEY_HEADER`) in `.env` to require an API key for `/api/v1/*` (health/readiness/liveness stay open).
+- Set `API_ADMIN_KEYS` and/or `API_KEYS` (comma-separated) to require an API key for `/api/v1/*` (health/readiness/liveness stay open).
+- `/api/v1/models/scan` requires an `admin` key when auth is enabled.
 - For browser WebSockets, pass `?api_key=...` (headers are not supported by the WebSocket API).
-- Set `API_RATE_LIMIT` to cap requests per minute (0 disables).
+- Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
+- Frontend: set the API key in the header UI (stored in localStorage) instead of baking it into build env vars.
+
+### Error Format + Request IDs
+
+- All 4xx/5xx return `{ "error": "...", "message": "...", "details": { ... }, "request_id": "..." }`.
+- Every response includes `X-Request-ID` (send it in the request to propagate your own id).
 
 ## Docker
 
