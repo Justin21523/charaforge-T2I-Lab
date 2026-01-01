@@ -367,6 +367,40 @@ class APIService {
     return await this.client.post(`/api/v1/t2i/cancel/${jobId}`);
   }
 
+  async listT2IJobs({ limit = 50, status = null, all = false } = {}) {
+    const params = { limit };
+    if (status) params.status = status;
+    if (all) params.all = true;
+    return await this.client.get("/api/v1/t2i/jobs", { params });
+  }
+
+  async deleteT2IJob(jobId, { deleteOutputs = true } = {}) {
+    return await this.client.delete(`/api/v1/t2i/jobs/${jobId}`, {
+      params: { delete_outputs: Boolean(deleteOutputs) },
+    });
+  }
+
+  async cleanupT2IJobs({
+    ttlSeconds,
+    dryRun = true,
+    deleteRecords = false,
+    all = false,
+    onlyTerminal = true,
+    limit = 200,
+  } = {}) {
+    const params = {
+      dry_run: Boolean(dryRun),
+      delete_records: Boolean(deleteRecords),
+      all: Boolean(all),
+      only_terminal: Boolean(onlyTerminal),
+      limit: Number(limit || 200),
+    };
+    if (ttlSeconds !== undefined && ttlSeconds !== null) {
+      params.ttl_seconds = Number(ttlSeconds);
+    }
+    return await this.client.post("/api/v1/t2i/jobs/cleanup", null, { params });
+  }
+
   async controlnetGenerate(params, controlType = "pose") {
     return await this.client.post(`/api/v1/controlnet/${controlType}`, params);
   }
@@ -429,6 +463,10 @@ class APIService {
 
   async cancelTraining(runId) {
     return await this.client.post(`/api/v1/finetune/lora/cancel/${runId}`);
+  }
+
+  async authMe() {
+    return await this.client.get("/api/v1/auth/me");
   }
 
   // File upload

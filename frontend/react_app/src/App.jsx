@@ -8,6 +8,7 @@ import LoRAManager from './components/lora/LoRAManager';
 import BatchProcessor from './components/batch/BatchProcessor';
 import TrainingMonitor from './components/training/TrainingMonitor';
 import ImageGallery from './components/gallery/ImageGallery';
+import T2IJobs from './components/jobs/T2IJobs';
 import './styles/components/App.css';
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
             <Route path="/batch" element={<BatchProcessor />} />
             <Route path="/training" element={<TrainingMonitor />} />
             <Route path="/gallery" element={<ImageGallery />} />
+            <Route path="/jobs" element={<T2IJobs />} />
           </Routes>
         </Layout>
       </Router>

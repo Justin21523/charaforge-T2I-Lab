@@ -7,6 +7,7 @@ import {
   Zap,
   Brain,
   Gallery,
+  ClipboardList,
   ChevronRight
 } from 'lucide-react';
 import '../../styles/components/Sidebar.css';
@@ -43,6 +44,12 @@ const Sidebar = ({ currentPath }) => {
       icon: Gallery,
       label: '圖片畫廊',
       description: '生成結果瀏覽'
+    },
+    {
+      path: '/jobs',
+      icon: ClipboardList,
+      label: '任務管理',
+      description: 'T2I jobs 列表 / 清理'
     },
   ];
 
