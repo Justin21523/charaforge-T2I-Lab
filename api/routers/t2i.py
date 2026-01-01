@@ -7,6 +7,8 @@ core `T2IPipelineManager` implementation.
 from __future__ import annotations
 
 import asyncio
+import json
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -25,7 +27,7 @@ from api.t2i_jobs import (
     write_access_meta,
 )
 from api.t2i_tokens import make_image_token, verify_image_token
-from core.config import get_settings
+from core.config import get_app_paths, get_settings
 
 router = APIRouter(prefix="/t2i", tags=["t2i"])
 
@@ -317,3 +319,163 @@ async def get_image(
         media_type = "image/webp"
 
     return stream_file(path, media_type=media_type, filename=path.name, disposition="inline")
+
+
+@router.get("/jobs")
+async def list_jobs(
+    request: Request,
+    limit: int = 50,
+    status: str | None = None,
+    all: bool = False,
+):
+    manager = _job_manager(request)
+    is_admin = _is_admin(request)
+    if all and not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    owner = None if (all and is_admin) else getattr(request.state, "client_key", "ip:unknown")
+    jobs = manager.list_jobs(owner=owner, limit=limit, status=status)
+    if not is_admin:
+        for job in jobs:
+            job.pop("owner", None)
+    return {"count": len(jobs), "jobs": jobs}
+
+
+@router.delete("/jobs/{job_id}")
+async def delete_job(
+    job_id: str,
+    request: Request,
+    delete_outputs: bool = True,
+):
+    manager = _job_manager(request)
+    _require_job_access(request, manager, job_id)
+
+    snapshot = manager.get(job_id)
+    if snapshot and str(snapshot.get("status") or "") == "running":
+        raise HTTPException(status_code=409, detail="Job is running; cancel first")
+
+    if snapshot and str(snapshot.get("status") or "") == "queued":
+        manager.cancel(job_id)
+
+    deleted_record = manager.delete_job(job_id)
+    deleted_outputs = False
+    if delete_outputs:
+        root = job_dir(job_id)
+        try:
+            shutil.rmtree(root)
+            deleted_outputs = True
+        except FileNotFoundError:
+            deleted_outputs = False
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "status": "deleted",
+        "job_id": job_id,
+        "deleted_record": bool(deleted_record),
+        "deleted_outputs": bool(deleted_outputs),
+    }
+
+
+@router.post("/jobs/cleanup")
+async def cleanup_jobs(
+    request: Request,
+    ttl_seconds: int | None = None,
+    dry_run: bool = True,
+    delete_records: bool = False,
+    all: bool = False,
+    only_terminal: bool = True,
+    limit: int = 200,
+):
+    manager = _job_manager(request)
+    is_admin = _is_admin(request)
+    if all and not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    settings = get_settings()
+    ttl = int(ttl_seconds if ttl_seconds is not None else (settings.api.t2i_output_ttl_seconds or 0))
+    if ttl <= 0:
+        raise HTTPException(status_code=400, detail="ttl_seconds must be > 0 (or set API_T2I_OUTPUT_TTL_SECONDS)")
+
+    limit = max(1, min(int(limit or 200), 2000))
+    owner = None if (all and is_admin) else getattr(request.state, "client_key", "ip:unknown")
+
+    root = get_app_paths().outputs / "t2i"
+    now = time.time()
+    scanned = 0
+    candidates = 0
+    skipped_active = 0
+    deleted_outputs = 0
+    deleted_records = 0
+
+    if not root.exists():
+        return {
+            "dry_run": bool(dry_run),
+            "ttl_seconds": ttl,
+            "owner": owner,
+            "scanned": 0,
+            "candidates": 0,
+            "skipped_active": 0,
+            "deleted_outputs": 0,
+            "deleted_records": 0,
+        }
+
+    for entry in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if candidates >= limit:
+            break
+        if not entry.is_dir():
+            continue
+        job_id = entry.name
+        scanned += 1
+
+        meta_path = entry / "_access.json"
+        meta_owner = None
+        created_at = 0.0
+        try:
+            raw = meta_path.read_text(encoding="utf-8")
+            meta = json.loads(raw)
+            if isinstance(meta, dict):
+                meta_owner = meta.get("owner")
+                created_at = float(meta.get("created_at") or 0.0)
+        except Exception:
+            meta_owner = None
+            created_at = 0.0
+
+        if owner and str(meta_owner or "") != owner:
+            continue
+
+        age = now - (created_at or entry.stat().st_mtime)
+        if age < ttl:
+            continue
+
+        snapshot = manager.get(job_id)
+        if only_terminal and snapshot and str(snapshot.get("status") or "") in {"queued", "running"}:
+            skipped_active += 1
+            continue
+
+        candidates += 1
+        if dry_run:
+            continue
+
+        try:
+            shutil.rmtree(entry)
+            deleted_outputs += 1
+        except FileNotFoundError:
+            pass
+        except Exception:
+            continue
+
+        if delete_records:
+            if manager.delete_job(job_id):
+                deleted_records += 1
+
+    return {
+        "dry_run": bool(dry_run),
+        "ttl_seconds": ttl,
+        "owner": owner,
+        "scanned": scanned,
+        "candidates": candidates,
+        "skipped_active": skipped_active,
+        "deleted_outputs": deleted_outputs,
+        "deleted_records": deleted_records,
+    }

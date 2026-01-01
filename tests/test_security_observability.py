@@ -1,10 +1,13 @@
+import json
+import time
+
 import httpx
 import pytest
 from httpx import ASGITransport
 
 import core.config as config
 from api.main import create_app
-from api.t2i_jobs import read_access_owner
+from api.t2i_jobs import access_meta_path, read_access_owner
 from api.t2i_tokens import make_image_token
 
 
@@ -207,3 +210,87 @@ async def test_metrics_endpoint_when_enabled(make_app):
         assert res.headers.get("content-type", "").startswith("text/plain")
         assert "X-Request-ID" in res.headers
         assert "charaforge_http_requests_total" in res.text
+
+
+@pytest.mark.anyio
+async def test_t2i_jobs_list_delete_and_cleanup(make_app):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key_1,user_key_2",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "prompt": "test",
+            "model_type": "sd15",
+            "width": 256,
+            "height": 256,
+            "steps": 1,
+            "batch_size": 1,
+        }
+        submit = await client.post("/api/v1/t2i/submit", json=payload, headers={"X-API-Key": "user_key_1"})
+        assert submit.status_code == 200
+        job_id = submit.json()["job_id"]
+
+        listed = await client.get("/api/v1/t2i/jobs", headers={"X-API-Key": "user_key_1"})
+        assert listed.status_code == 200
+        assert any(item.get("job_id") == job_id for item in listed.json().get("jobs") or [])
+
+        other = await client.get("/api/v1/t2i/jobs", headers={"X-API-Key": "user_key_2"})
+        assert other.status_code == 200
+        assert not any(item.get("job_id") == job_id for item in other.json().get("jobs") or [])
+
+        forbidden_all = await client.get(
+            "/api/v1/t2i/jobs", params={"all": "true"}, headers={"X-API-Key": "user_key_1"}
+        )
+        assert forbidden_all.status_code == 403
+
+        admin_all = await client.get(
+            "/api/v1/t2i/jobs", params={"all": "true"}, headers={"X-API-Key": "admin_key"}
+        )
+        assert admin_all.status_code == 200
+        assert any(item.get("job_id") == job_id for item in admin_all.json().get("jobs") or [])
+
+        delete_forbidden = await client.delete(
+            f"/api/v1/t2i/jobs/{job_id}", headers={"X-API-Key": "user_key_2"}
+        )
+        assert delete_forbidden.status_code == 403
+
+        deleted = await client.delete(
+            f"/api/v1/t2i/jobs/{job_id}", headers={"X-API-Key": "user_key_1"}
+        )
+        assert deleted.status_code == 200
+
+        gone = await client.get(f"/api/v1/t2i/status/{job_id}", headers={"X-API-Key": "user_key_1"})
+        assert gone.status_code == 404
+
+        submit2 = await client.post("/api/v1/t2i/submit", json=payload, headers={"X-API-Key": "user_key_1"})
+        assert submit2.status_code == 200
+        job_id2 = submit2.json()["job_id"]
+
+        cancelled = await client.post(
+            f"/api/v1/t2i/cancel/{job_id2}", headers={"X-API-Key": "user_key_1"}
+        )
+        assert cancelled.status_code == 200
+
+        meta_path = access_meta_path(job_id2)
+        raw = meta_path.read_text(encoding="utf-8")
+        meta = json.loads(raw)
+        meta["created_at"] = time.time() - 10.0
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+        cleaned = await client.post(
+            "/api/v1/t2i/jobs/cleanup",
+            params={"ttl_seconds": 1, "dry_run": "false", "delete_records": "true"},
+            headers={"X-API-Key": "user_key_1"},
+        )
+        assert cleaned.status_code == 200
+        assert cleaned.json()["deleted_outputs"] >= 1
+        assert cleaned.json()["deleted_records"] >= 1
+
+        gone2 = await client.get(f"/api/v1/t2i/status/{job_id2}", headers={"X-API-Key": "user_key_1"})
+        assert gone2.status_code == 404

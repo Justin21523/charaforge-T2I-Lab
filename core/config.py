@@ -239,6 +239,11 @@ class APIConfig(BaseSettings):
     t2i_job_max_attempts: int = Field(
         default=2, ge=1, validation_alias=AliasChoices("T2I_JOB_MAX_ATTEMPTS", "API_T2I_JOB_MAX_ATTEMPTS")
     )
+    t2i_output_ttl_seconds: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("T2I_OUTPUT_TTL_SECONDS", "API_T2I_OUTPUT_TTL_SECONDS"),
+    )
     t2i_image_token_ttl_seconds: int = Field(
         default=3600,
         ge=0,

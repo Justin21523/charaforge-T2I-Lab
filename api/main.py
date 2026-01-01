@@ -78,6 +78,10 @@ def _required_scope(path: str, method: str) -> str | None:
             f"{API_V1_PREFIX}/t2i/status/"
         ):
             return "t2i:read"
+        if path.startswith(f"{API_V1_PREFIX}/t2i/jobs"):
+            if method in {"GET", "HEAD"}:
+                return "t2i:read"
+            return "t2i:manage"
         if path.startswith(f"{API_V1_PREFIX}/t2i/cancel/"):
             return "t2i:cancel"
         return "t2i:generate"

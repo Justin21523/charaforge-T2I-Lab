@@ -199,7 +199,13 @@ def _snapshot_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "job_id": record.get("job_id"),
+        "owner": record.get("owner"),
         "status": record.get("status"),
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+        "started_at": record.get("started_at"),
+        "finished_at": record.get("finished_at"),
+        "attempts": record.get("attempts"),
         "cancel_requested": bool(record.get("cancel_requested")),
         "progress": progress,
         "seed": record.get("seed"),
@@ -335,6 +341,28 @@ class _MemoryBackend:
                 elif job.status == "running":
                     running += 1
             return {"queued": queued, "running": running}
+
+    def list_jobs(
+        self, *, owner: str | None = None, limit: int = 50, status: str | None = None
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 200))
+        with self._lock:
+            jobs = list(self._jobs.values())
+        if owner:
+            jobs = [j for j in jobs if j.owner == owner]
+        if status:
+            jobs = [j for j in jobs if j.status == status]
+        jobs.sort(key=lambda j: j.created_at, reverse=True)
+        return [_snapshot_from_record(j.to_record()) for j in jobs[:limit]]
+
+    def delete_job(self, job_id: str) -> bool:
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return False
+        with self._lock:
+            existed = job_id in self._jobs
+            self._jobs.pop(job_id, None)
+            return existed
 
     def owner_counts(self, owner: str) -> Dict[str, int]:
         with self._lock:
@@ -519,6 +547,8 @@ class _RedisBackend:
         pipe.set(self._job_key(job_id), payload)
         pipe.rpush(self._queue_key(), job_id)
         pipe.sadd(self._owner_queued_key(owner), job_id)
+        pipe.zadd(self._jobs_index_key(), {job_id: now})
+        pipe.zadd(self._owner_jobs_index_key(owner), {job_id: now})
         pipe.execute()
 
         return job_id
@@ -582,6 +612,68 @@ class _RedisBackend:
         except Exception:
             return {"queued": 0, "running": 0}
 
+    def list_jobs(
+        self, *, owner: str | None = None, limit: int = 50, status: str | None = None
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 200))
+        key = self._owner_jobs_index_key(owner) if owner else self._jobs_index_key()
+
+        fetch = min(1000, max(limit * 5, limit))
+        try:
+            job_ids = [str(v) for v in (self._client.zrevrange(key, 0, fetch - 1) or [])]
+        except Exception:
+            job_ids = []
+
+        out: List[Dict[str, Any]] = []
+        stale: List[str] = []
+        for job_id in job_ids:
+            record = self._load_job(job_id)
+            if record is None:
+                stale.append(job_id)
+                continue
+            snap = _snapshot_from_record(record)
+            if status and str(snap.get("status") or "") != status:
+                continue
+            out.append(snap)
+            if len(out) >= limit:
+                break
+
+        if stale:
+            try:
+                self._client.zrem(key, *stale)
+            except Exception:
+                pass
+
+        return out
+
+    def delete_job(self, job_id: str) -> bool:
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return False
+
+        record = self._load_job(job_id) or {}
+        owner = str(record.get("owner") or "")
+
+        try:
+            pipe = self._client.pipeline()
+            pipe.delete(self._job_key(job_id))
+            pipe.delete(self._cancel_key(job_id))
+            pipe.lrem(self._queue_key(), 0, job_id)
+            pipe.lrem(self._processing_key(), 0, job_id)
+            pipe.zrem(self._jobs_index_key(), job_id)
+            if owner:
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.srem(self._owner_running_key(owner), job_id)
+                pipe.zrem(self._owner_jobs_index_key(owner), job_id)
+            pipe.execute()
+        except Exception:
+            return False
+
+        for index in range(1, int(self._max_global_concurrent or 0) + 1):
+            self._release_global_slot(self._slot_key(index), job_id)
+
+        return True
+
     def _requeue_processing(self, job_id: str) -> None:
         try:
             pipe = self._client.pipeline()
@@ -602,11 +694,14 @@ class _RedisBackend:
     def _slot_key(self, index: int) -> str:
         return f"{self._namespace}:gpu_slot:{index}"
 
+    def _slot_ttl_seconds(self) -> int:
+        return max(600, int(self._stale_seconds or 0) * 3)
+
     def _acquire_global_slot(self, job_id: str) -> Tuple[bool, str | None]:
         if self._max_global_concurrent <= 0:
             return True, None
 
-        ttl = max(600, self._stale_seconds * 3)
+        ttl = self._slot_ttl_seconds()
         try:
             for index in range(1, self._max_global_concurrent + 1):
                 key = self._slot_key(index)
@@ -616,6 +711,22 @@ class _RedisBackend:
         except Exception:
             return True, None
         return False, None
+
+    def _renew_global_slot(self, slot_key: str, job_id: str) -> None:
+        if not slot_key:
+            return
+        ttl = self._slot_ttl_seconds()
+        try:
+            self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                1,
+                slot_key,
+                job_id,
+                str(int(ttl)),
+            )
+        except Exception:
+            return
 
     def _release_global_slot(self, slot_key: str, job_id: str) -> None:
         if not slot_key:
@@ -708,6 +819,7 @@ class _RedisBackend:
                 pipe.execute()
 
             cancel_event = threading.Event()
+            last_slot_renew = 0.0
 
             def _on_progress(step: int, total: int) -> None:
                 if self._is_cancel_requested(job_id):
@@ -720,6 +832,13 @@ class _RedisBackend:
                 record_update["progress_total"] = int(total)
                 record_update["updated_at"] = time.time()
                 self._save_job(job_id, record_update)
+
+                nonlocal last_slot_renew
+                if slot_key:
+                    now = time.time()
+                    if now - last_slot_renew >= 10.0:
+                        self._renew_global_slot(slot_key, job_id)
+                        last_slot_renew = now
 
             try:
                 req_payload = record.get("request") or {}
@@ -869,6 +988,12 @@ class _RedisBackend:
     def _owner_running_key(self, owner: str) -> str:
         return f"{self._namespace}:owner:{owner}:running"
 
+    def _jobs_index_key(self) -> str:
+        return f"{self._namespace}:jobs"
+
+    def _owner_jobs_index_key(self, owner: str | None) -> str:
+        return f"{self._namespace}:owner:{owner}:jobs"
+
     def _load_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         try:
             raw = self._client.get(self._job_key(job_id))
@@ -953,3 +1078,11 @@ class T2IJobManager:
 
     def global_counts(self) -> Dict[str, int]:
         return self._backend.global_counts()
+
+    def list_jobs(
+        self, *, owner: str | None = None, limit: int = 50, status: str | None = None
+    ) -> List[Dict[str, Any]]:
+        return self._backend.list_jobs(owner=owner, limit=limit, status=status)
+
+    def delete_job(self, job_id: str) -> bool:
+        return self._backend.delete_job(job_id)
