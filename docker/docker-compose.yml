@@ -29,6 +29,10 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - API_CORS_ORIGINS=http://localhost:3000
+      # T2I dispatch:
+      # - redis (default): use `t2i_worker` (python -m api.t2i_worker)
+      # - celery: use `t2i_celery_worker` (queue=t2i)
+      - API_T2I_DISPATCH_MODE=${API_T2I_DISPATCH_MODE:-redis}
     volumes:
       - /mnt/c/ai_models:/mnt/c/ai_models
       - /mnt/c/ai_cache:/mnt/c/ai_cache
@@ -81,6 +85,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - API_T2I_WORKER_ENABLED=true
+      - API_T2I_DISPATCH_MODE=redis
     volumes:
       - /mnt/c/ai_models:/mnt/c/ai_models
       - /mnt/c/ai_cache:/mnt/c/ai_cache
@@ -89,6 +94,29 @@ services:
       redis:
         condition: service_healthy
     command: python -m api.t2i_worker
+
+  t2i_celery_worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      - PROJECT_SLUG=charaforge-t2i-lab
+      - AI_MODELS_ROOT=/mnt/c/ai_models
+      - AI_CACHE_ROOT=/mnt/c/ai_cache
+      - AI_DATASETS_ROOT=/mnt/data/datasets
+      - AI_TRAINING_ROOT=/mnt/data/training
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - API_T2I_DISPATCH_MODE=celery
+    volumes:
+      - /mnt/c/ai_models:/mnt/c/ai_models
+      - /mnt/c/ai_cache:/mnt/c/ai_cache
+      - /mnt/data:/mnt/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A workers.celery_app worker --loglevel=INFO --queues=t2i --concurrency=1
 
   react:
     image: node:18-alpine

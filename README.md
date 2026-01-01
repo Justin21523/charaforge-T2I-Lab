@@ -145,7 +145,13 @@ curl -s -X POST http://localhost:8000/api/v1/auth/refresh \\
 
 ```bash
 # T2I worker (Celery task mode)
-celery -A workers.celery_app worker -Q t2i --concurrency 1 --loglevel=info
+export API_T2I_DISPATCH_MODE=celery
+
+# Start a dedicated `t2i` queue worker
+bash scripts/start_t2i_celery_worker.sh
+
+# Or via Docker Compose
+API_T2I_DISPATCH_MODE=celery docker compose -f docker/docker-compose.yml up --build t2i_celery_worker
 ```
 
 ## Docker
