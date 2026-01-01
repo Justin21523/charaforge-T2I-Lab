@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const DEFAULT_RECONNECT_DELAY_MS = 1500;
 const STORAGE_API_KEY = "charaforge.apiKey";
+const STORAGE_USE_JWT = "charaforge.auth.useJwt";
+const STORAGE_JWT_ACCESS_TOKEN = "charaforge.jwt.accessToken";
+const STORAGE_JWT_EXPIRES_AT = "charaforge.jwt.expiresAt";
 
 const readStoredJson = (key, fallback) => {
   try {
@@ -27,7 +30,14 @@ export const buildTrainProgressWsUrl = (apiBaseUrl, jobId) =>
   (() => {
     const url = new URL(toWsUrl(apiBaseUrl, `/api/v1/ws/train/${jobId}`));
     const apiKey = readStoredJson(STORAGE_API_KEY, "") || "";
-    if (apiKey) {
+    const useJwt = Boolean(readStoredJson(STORAGE_USE_JWT, false));
+    const accessToken = readStoredJson(STORAGE_JWT_ACCESS_TOKEN, "") || "";
+    const expiresAt = Number(readStoredJson(STORAGE_JWT_EXPIRES_AT, 0) || 0);
+    const now = Math.floor(Date.now() / 1000);
+
+    if (useJwt && accessToken && expiresAt > now + 10) {
+      url.searchParams.set("access_token", accessToken);
+    } else if (apiKey) {
       url.searchParams.set("api_key", apiKey);
     }
     return url.toString();

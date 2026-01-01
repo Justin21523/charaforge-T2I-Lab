@@ -85,7 +85,7 @@ npm run dev
 
 - Set `API_ADMIN_KEYS` and/or `API_KEYS` (comma-separated) to require an API key for `/api/v1/*` (health/readiness/liveness stay open).
 - `/api/v1/models/scan` requires an `admin` key when auth is enabled.
-- For browser WebSockets, pass `?api_key=...` (headers are not supported by the WebSocket API).
+- For browser WebSockets, pass `?access_token=...` (JWT) or `?api_key=...` (API key); headers are not supported by the WebSocket API.
 - Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
 - Bucket limits: `API_UPLOAD_RATE_LIMIT` and `API_DATASETS_RATE_LIMIT` (requests/minute, 0 disables).
 - Cost-based throttles: `API_T2I_COST_RATE_LIMIT` (cost units/minute, 0 disables).

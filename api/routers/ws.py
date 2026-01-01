@@ -16,7 +16,8 @@ import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from api.security import parse_api_keys, resolve_api_key
+from api.jwt_tokens import verify_access_token
+from api.security import parse_api_keys, resolve_api_key, scope_allows
 from core.config import get_settings
 
 router = APIRouter(prefix="/ws", tags=["ws"])
@@ -50,23 +51,54 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
 
     auth_enabled = bool(admin_keys or user_keys or (api_key_store and api_key_store.has_active_keys()))
     if auth_enabled:
-        header_name = settings.api.key_header or "X-API-Key"
-        presented = (
-            websocket.headers.get(header_name)
-            or websocket.query_params.get("api_key")
-            or websocket.query_params.get("token")
-        )
-        auth = resolve_api_key(
-            presented,
-            admin_keys=admin_keys,
-            user_keys=user_keys,
-            key_store=api_key_store,
-        )
-        if not auth:
-            await websocket.accept()
-            await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
-            await websocket.close(code=4401)
-            return
+        required_scope = "train:manage"
+
+        access_token = websocket.query_params.get("access_token")
+        if access_token:
+            payload = verify_access_token(access_token)
+            if not payload:
+                await websocket.accept()
+                await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
+                await websocket.close(code=4401)
+                return
+
+            role = str(payload.get("role") or "user")
+            scopes_raw = payload.get("scopes") or []
+            if isinstance(scopes_raw, str):
+                scopes_raw = [scopes_raw]
+            scopes = {str(s).strip() for s in scopes_raw if str(s).strip()}
+            if scopes and not scope_allows(scopes, required_scope):
+                await websocket.accept()
+                await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
+                await websocket.close(code=4403)
+                return
+            if not scopes and role != "admin":
+                # Legacy un-scoped keys are allowed (matches HTTP middleware behavior).
+                pass
+        else:
+            header_name = settings.api.key_header or "X-API-Key"
+            presented = (
+                websocket.headers.get(header_name)
+                or websocket.query_params.get("api_key")
+                or websocket.query_params.get("token")
+            )
+            auth = resolve_api_key(
+                presented,
+                admin_keys=admin_keys,
+                user_keys=user_keys,
+                key_store=api_key_store,
+            )
+            if not auth:
+                await websocket.accept()
+                await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
+                await websocket.close(code=4401)
+                return
+
+            if auth.scopes and not scope_allows(auth.scopes, required_scope):
+                await websocket.accept()
+                await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
+                await websocket.close(code=4403)
+                return
 
     await websocket.accept()
 
