@@ -72,6 +72,7 @@ npm run dev
 ## API (Base Prefix: `/api/v1`)
 
 - Health: `GET /api/v1/health`
+- Auth: `GET /api/v1/auth/me`, `POST /api/v1/auth/token`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET|POST /api/v1/auth/keys/*` (admin)
 - T2I: `POST /api/v1/t2i/generate`, `POST /api/v1/t2i/submit`, `GET /api/v1/t2i/status/{job_id}`, `POST /api/v1/t2i/cancel/{job_id}`, `GET /api/v1/t2i/jobs`, `DELETE /api/v1/t2i/jobs/{job_id}`
 - ControlNet: `POST /api/v1/controlnet/{pose|depth|canny|lineart}`
 - LoRA: `GET /api/v1/lora/list`, `POST /api/v1/lora/load`, `POST /api/v1/lora/unload`
@@ -91,6 +92,8 @@ npm run dev
 - Output cleanup: `API_T2I_OUTPUT_TTL_SECONDS` (seconds, 0 disables), plus `POST /api/v1/t2i/jobs/cleanup`.
 - T2I queue/concurrency: per-owner `API_T2I_MAX_CONCURRENT`/`API_T2I_MAX_QUEUE`, global `API_T2I_MAX_GLOBAL_CONCURRENT`/`API_T2I_MAX_GLOBAL_QUEUE`.
 - Frontend: set the API key in the header UI (stored in localStorage) instead of baking it into build env vars.
+- Optional JWT: exchange an API key once (`POST /api/v1/auth/token`) then use `Authorization: Bearer ...` for subsequent calls; refresh via `POST /api/v1/auth/refresh` (no API key needed).
+- JWT TTL: `API_JWT_ACCESS_TTL_SECONDS` and `API_JWT_REFRESH_TTL_SECONDS`.
 
 ### Managed API Keys (`/api/v1/auth/*`)
 
@@ -109,6 +112,21 @@ curl -s http://localhost:8000/api/v1/auth/keys -H "X-API-Key: $ADMIN_KEY"
 curl -s -X POST http://localhost:8000/api/v1/auth/keys \\
   -H "Content-Type: application/json" -H "X-API-Key: $ADMIN_KEY" \\
   -d '{"role":"user","scopes":["t2i:generate"],"label":"frontend"}'
+```
+
+### JWT Tokens (`/api/v1/auth/token|refresh|logout`)
+
+```bash
+# Exchange API key -> short-lived access token + refresh token
+curl -s -X POST http://localhost:8000/api/v1/auth/token -H "X-API-Key: $API_KEY"
+
+# Use the access token (no API key header required)
+curl -s http://localhost:8000/api/v1/datasets/root -H "Authorization: Bearer $ACCESS_TOKEN"
+
+# Refresh (rotates refresh_token)
+curl -s -X POST http://localhost:8000/api/v1/auth/refresh \\
+  -H "Content-Type: application/json" \\
+  -d '{"refresh_token":"'$REFRESH_TOKEN'"}'
 ```
 
 ### Error Format + Request IDs

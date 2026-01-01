@@ -221,6 +221,16 @@ class APIConfig(BaseSettings):
     api_keys: str = Field(default="", validation_alias=AliasChoices("KEYS", "API_KEYS"))
     api_admin_keys: str = Field(default="", validation_alias=AliasChoices("ADMIN_KEYS", "API_ADMIN_KEYS"))
     key_header: str = Field(default="X-API-Key")
+    jwt_access_ttl_seconds: int = Field(
+        default=900,
+        ge=0,
+        validation_alias=AliasChoices("JWT_ACCESS_TTL_SECONDS", "API_JWT_ACCESS_TTL_SECONDS"),
+    )
+    jwt_refresh_ttl_seconds: int = Field(
+        default=2592000,
+        ge=0,
+        validation_alias=AliasChoices("JWT_REFRESH_TTL_SECONDS", "API_JWT_REFRESH_TTL_SECONDS"),
+    )
     rate_limit: int = Field(default=100, ge=0)  # requests per minute (0 disables)
     scan_rate_limit: int = Field(
         default=5, ge=0, validation_alias=AliasChoices("SCAN_RATE_LIMIT", "API_SCAN_RATE_LIMIT")

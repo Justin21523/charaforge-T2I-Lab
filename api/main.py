@@ -21,6 +21,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from api.jwt_tokens import verify_access_token
 from api.routers.health import router as health_router
 from api.security import (
     RateLimiter,
@@ -272,27 +273,83 @@ def create_app() -> FastAPI:
         if not path.startswith(API_V1_PREFIX) or is_exempt_v1_request(request):
             return await call_next(request)
 
+        allow_anonymous = path in {
+            f"{API_V1_PREFIX}/auth/refresh",
+            f"{API_V1_PREFIX}/auth/logout",
+        }
+
         is_scan_request = path == f"{API_V1_PREFIX}/models/scan"
         is_t2i_image_request = path.startswith(f"{API_V1_PREFIX}/t2i/images/")
         is_controlnet_image_request = path.startswith(f"{API_V1_PREFIX}/controlnet/images/")
         has_image_token = bool(request.query_params.get("img_token"))
-        presented = extract_api_key(request, header_name)
-        auth = resolve_api_key(
-            presented,
-            admin_keys=admin_keys,
-            user_keys=user_keys,
-            key_store=api_key_store,
-        )
-        role = auth.role if auth else None
-        request.state.auth_role = role or "anonymous"
-        request.state.auth_scopes = auth.scopes if auth else set()
-        request.state.api_key_id = auth.key_id if auth else None
-        request.state.client_key = get_client_key(request, api_key=presented if auth else None)
-        if auth and auth.key_id and api_key_store is not None:
-            try:
-                api_key_store.mark_used(auth.key_id)
-            except Exception:
-                pass
+
+        request.state.auth_source = "anonymous"
+        request.state.auth_role = "anonymous"
+        request.state.auth_scopes = set()
+        request.state.api_key_id = None
+        request.state.client_key = get_client_key(request, api_key=None)
+
+        authorization = request.headers.get("Authorization", "").strip()
+        if authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+            payload = verify_access_token(token)
+            if not payload:
+                return JSONResponse(
+                    status_code=401,
+                    content=_error_payload(
+                        request,
+                        code="INVALID_TOKEN",
+                        message="Unauthorized",
+                    ),
+                )
+
+            role = str(payload.get("role") or "user")
+            scopes = payload.get("scopes") or []
+            if isinstance(scopes, str):
+                scopes = [scopes]
+            scope_set = {str(s).strip() for s in scopes if str(s).strip()}
+            subject = str(payload.get("sub") or "")
+            if not subject:
+                return JSONResponse(
+                    status_code=401,
+                    content=_error_payload(
+                        request,
+                        code="INVALID_TOKEN",
+                        message="Unauthorized",
+                    ),
+                )
+
+            request.state.auth_source = "jwt"
+            request.state.auth_role = role or "user"
+            request.state.auth_scopes = scope_set
+            request.state.api_key_id = payload.get("kid")
+            request.state.client_key = subject
+            if request.state.api_key_id and api_key_store is not None:
+                try:
+                    api_key_store.mark_used(str(request.state.api_key_id))
+                except Exception:
+                    pass
+        else:
+            presented = extract_api_key(request, header_name)
+            auth = resolve_api_key(
+                presented,
+                admin_keys=admin_keys,
+                user_keys=user_keys,
+                key_store=api_key_store,
+            )
+            role = auth.role if auth else None
+            request.state.auth_source = "api_key" if auth else "anonymous"
+            request.state.auth_role = role or "anonymous"
+            request.state.auth_scopes = auth.scopes if auth else set()
+            request.state.api_key_id = auth.key_id if auth else None
+            request.state.client_key = get_client_key(
+                request, api_key=presented if auth else None
+            )
+            if auth and auth.key_id and api_key_store is not None:
+                try:
+                    api_key_store.mark_used(auth.key_id)
+                except Exception:
+                    pass
 
         rate_client_key = request.state.client_key
         global_rate_limit = int(settings.api.rate_limit or 0)
@@ -376,8 +433,9 @@ def create_app() -> FastAPI:
                     headers=headers,
                 )
 
+        authenticated = getattr(request.state, "auth_role", "anonymous") != "anonymous"
         if auth_enabled:
-            if not auth:
+            if not authenticated and not allow_anonymous:
                 if (is_t2i_image_request or is_controlnet_image_request) and has_image_token:
                     return await call_next(request)
                 return JSONResponse(
@@ -389,29 +447,30 @@ def create_app() -> FastAPI:
                     ),
                 )
 
-            required_scope = _required_scope(path, request.method)
-            if required_scope:
-                scopes = auth.scopes if auth else set()
-                if scopes:
-                    if not scope_allows(scopes, required_scope):
+            if authenticated:
+                required_scope = _required_scope(path, request.method)
+                if required_scope:
+                    scopes = getattr(request.state, "auth_scopes", set()) or set()
+                    if scopes:
+                        if not scope_allows(scopes, required_scope):
+                            return JSONResponse(
+                                status_code=403,
+                                content=_error_payload(
+                                    request,
+                                    code="INSUFFICIENT_SCOPE",
+                                    message="Forbidden",
+                                    details={"required": required_scope},
+                                ),
+                            )
+                    elif required_scope == "models:scan" and getattr(request.state, "auth_role", "") != "admin":
                         return JSONResponse(
                             status_code=403,
                             content=_error_payload(
                                 request,
-                                code="INSUFFICIENT_SCOPE",
+                                code="FORBIDDEN",
                                 message="Forbidden",
-                                details={"required": required_scope},
                             ),
                         )
-                elif required_scope == "models:scan" and role != "admin":
-                    return JSONResponse(
-                        status_code=403,
-                        content=_error_payload(
-                            request,
-                            code="FORBIDDEN",
-                            message="Forbidden",
-                        ),
-                    )
 
         response = await call_next(request)
 

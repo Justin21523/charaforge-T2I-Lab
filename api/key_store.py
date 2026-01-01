@@ -153,6 +153,13 @@ class APIKeyStore:
         keys = self._load_records()
         return any(not record.get("revoked_at") for record in keys.values())
 
+    def is_active_key_id(self, key_id: str) -> bool:
+        key_id = str(key_id or "").strip()
+        if not key_id:
+            return False
+        record = self._load_records().get(key_id)
+        return bool(record and not record.get("revoked_at"))
+
     def verify(self, raw_key: str) -> Optional[VerifiedKey]:
         parsed = _parse_key(raw_key)
         if not parsed:

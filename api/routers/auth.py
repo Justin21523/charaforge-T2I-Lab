@@ -1,4 +1,9 @@
-"""Authentication / API key management endpoints."""
+"""Authentication / API key management endpoints.
+
+Supports:
+- Managed API keys (admin-only management)
+- JWT access tokens (short-lived) + refresh tokens (stored server-side)
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,10 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from api.jwt_tokens import make_access_token
 from api.key_store import APIKeyStore
+from api.refresh_store import RefreshTokenStore
+from core.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,6 +35,15 @@ def _store(request: Request) -> APIKeyStore:
         return store
     store = APIKeyStore.default()
     request.app.state.api_key_store = store
+    return store
+
+
+def _refresh_store(request: Request) -> RefreshTokenStore:
+    store = getattr(request.app.state, "refresh_token_store", None)
+    if isinstance(store, RefreshTokenStore):
+        return store
+    store = RefreshTokenStore.default(redis_url=getattr(request.app.state, "redis_url", None))
+    request.app.state.refresh_token_store = store
     return store
 
 
@@ -68,6 +85,25 @@ class RotateKeyResponse(BaseModel):
     label: Optional[str] = None
 
 
+class TokenResponse(BaseModel):
+    token_type: str = Field(default="bearer")
+    access_token: str
+    expires_at: int
+    refresh_token: str
+    refresh_expires_at: int
+    role: str
+    scopes: List[str] = Field(default_factory=list)
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+    all: bool = Field(default=False)
+
+
 @router.get("/me")
 async def me(request: Request) -> Dict[str, Any]:
     return {
@@ -75,7 +111,119 @@ async def me(request: Request) -> Dict[str, Any]:
         "scopes": sorted(getattr(request.state, "auth_scopes", set()) or set()),
         "api_key_id": getattr(request.state, "api_key_id", None),
         "client_key": getattr(request.state, "client_key", None),
+        "auth_source": getattr(request.state, "auth_source", "anonymous"),
     }
+
+
+@router.post("/token", response_model=TokenResponse)
+async def issue_token(request: Request) -> TokenResponse:
+    """Exchange an API key for JWT access + refresh tokens.
+
+    For security, this endpoint requires API key auth (not an existing JWT).
+    """
+
+    if getattr(request.state, "auth_source", "anonymous") != "api_key":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    role = str(getattr(request.state, "auth_role", "user") or "user")
+    scopes = set(getattr(request.state, "auth_scopes", set()) or set())
+    key_id = getattr(request.state, "api_key_id", None)
+    subject = str(getattr(request.state, "client_key", "") or "")
+    if not subject:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    settings = get_settings()
+    access_token, expires_at = make_access_token(
+        subject=subject,
+        role=role,
+        scopes=scopes,
+        key_id=str(key_id) if key_id else None,
+        ttl_seconds=int(settings.api.jwt_access_ttl_seconds or 0),
+    )
+
+    refresh_store = _refresh_store(request)
+    refresh_token, refresh_expires_at = refresh_store.issue(
+        subject=subject,
+        role=role,
+        scopes=scopes,
+        key_id=str(key_id) if key_id else None,
+        ttl_seconds=int(settings.api.jwt_refresh_ttl_seconds or 0),
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        expires_at=expires_at,
+        refresh_token=refresh_token,
+        refresh_expires_at=refresh_expires_at,
+        role=role,
+        scopes=sorted(scopes),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(request: Request, payload: RefreshRequest) -> TokenResponse:
+    """Rotate refresh token and mint a new access token."""
+
+    refresh_store = _refresh_store(request)
+    record = refresh_store.verify(payload.refresh_token)
+    if not record:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    subject = str(record.get("subject") or "")
+    role = str(record.get("role") or "user")
+    scopes = set(record.get("scopes") or [])
+    key_id = record.get("key_id")
+
+    api_key_store = getattr(request.app.state, "api_key_store", None)
+    if key_id and isinstance(api_key_store, APIKeyStore):
+        try:
+            if not api_key_store.is_active_key_id(str(key_id)):
+                raise HTTPException(status_code=401, detail="Unauthorized")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    settings = get_settings()
+    access_token, expires_at = make_access_token(
+        subject=subject,
+        role=role,
+        scopes=scopes,
+        key_id=str(key_id) if key_id else None,
+        ttl_seconds=int(settings.api.jwt_access_ttl_seconds or 0),
+    )
+
+    new_refresh_token, refresh_expires_at = refresh_store.issue(
+        subject=subject,
+        role=role,
+        scopes=scopes,
+        key_id=str(key_id) if key_id else None,
+        ttl_seconds=int(settings.api.jwt_refresh_ttl_seconds or 0),
+    )
+    refresh_store.revoke(payload.refresh_token)
+
+    return TokenResponse(
+        access_token=access_token,
+        expires_at=expires_at,
+        refresh_token=new_refresh_token,
+        refresh_expires_at=refresh_expires_at,
+        role=role,
+        scopes=sorted(scopes),
+    )
+
+
+@router.post("/logout")
+async def logout(request: Request, payload: LogoutRequest) -> Dict[str, Any]:
+    refresh_store = _refresh_store(request)
+    deleted = 0
+    if payload.all:
+        record = refresh_store.verify(payload.refresh_token)
+        if record:
+            deleted = refresh_store.revoke_subject(str(record.get("subject") or ""))
+    else:
+        ok = refresh_store.revoke(payload.refresh_token)
+        deleted = 1 if ok else 0
+    return {"status": "ok", "revoked": True, "count": deleted}
 
 
 @router.get("/keys", response_model=ListKeysResponse)

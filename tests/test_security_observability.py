@@ -294,3 +294,50 @@ async def test_t2i_jobs_list_delete_and_cleanup(make_app):
 
         gone2 = await client.get(f"/api/v1/t2i/status/{job_id2}", headers={"X-API-Key": "user_key_1"})
         assert gone2.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_jwt_token_exchange_refresh_and_bearer_auth(make_app):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_JWT_ACCESS_TTL_SECONDS="60",
+        API_JWT_REFRESH_TTL_SECONDS="3600",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        issued = await client.post("/api/v1/auth/token", headers={"X-API-Key": "user_key"})
+        assert issued.status_code == 200
+        payload = issued.json()
+        assert payload.get("access_token")
+        assert payload.get("refresh_token")
+
+        bearer = {"Authorization": f"Bearer {payload['access_token']}"}
+        res = await client.get("/api/v1/datasets/root", headers=bearer)
+        assert res.status_code == 200
+
+        # The refresh endpoint is usable without an API key.
+        refreshed = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": payload["refresh_token"]}
+        )
+        assert refreshed.status_code == 200
+        refreshed_payload = refreshed.json()
+        assert refreshed_payload.get("access_token")
+        assert refreshed_payload.get("refresh_token")
+        assert refreshed_payload["refresh_token"] != payload["refresh_token"]
+
+        # Old refresh token is invalid after rotation.
+        reused = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": payload["refresh_token"]}
+        )
+        assert reused.status_code == 401
+        _assert_error_schema(reused)
+
+        # /auth/token requires API key auth (not an access token).
+        blocked = await client.post("/api/v1/auth/token", headers={"Authorization": bearer["Authorization"]})
+        assert blocked.status_code == 401
+        _assert_error_schema(blocked)
