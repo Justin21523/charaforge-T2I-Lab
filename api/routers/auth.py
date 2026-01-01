@@ -264,7 +264,12 @@ async def revoke_key(request: Request, key_id: str) -> Dict[str, Any]:
     ok = store.revoke_key(key_id, actor_key_id=getattr(request.state, "api_key_id", None))
     if not ok:
         raise HTTPException(status_code=404, detail="Key not found")
-    return {"status": "ok", "key_id": key_id, "revoked": True}
+    revoked_refresh = 0
+    try:
+        revoked_refresh = _refresh_store(request).revoke_key_id(key_id)
+    except Exception:
+        revoked_refresh = 0
+    return {"status": "ok", "key_id": key_id, "revoked": True, "revoked_refresh_tokens": revoked_refresh}
 
 
 @router.post("/keys/{key_id}/rotate", response_model=RotateKeyResponse)
@@ -276,6 +281,10 @@ async def rotate_key(request: Request, key_id: str) -> RotateKeyResponse:
         raise HTTPException(status_code=404, detail="Key not found")
 
     new_id, raw_key = rotated
+    try:
+        _refresh_store(request).revoke_key_id(key_id)
+    except Exception:
+        pass
     record = next((k for k in store.list_keys(include_revoked=True) if k.get("key_id") == new_id), {})
 
     return RotateKeyResponse(

@@ -80,6 +80,9 @@ class RefreshTokenStore:
     def _redis_subject_key(self, subject: str) -> str:
         return f"charaforge:auth:refresh:sub:{subject}"
 
+    def _redis_key_id_key(self, key_id: str) -> str:
+        return f"charaforge:auth:refresh:kid:{key_id}"
+
     def issue(
         self,
         *,
@@ -120,10 +123,15 @@ class RefreshTokenStore:
             try:
                 key = self._redis_key(token_hash)
                 subject_key = self._redis_subject_key(str(subject))
+                key_id_value = str(key_id) if key_id else ""
+                key_id_key = self._redis_key_id_key(key_id_value) if key_id_value else ""
                 pipe = client.pipeline()
                 pipe.set(key, json.dumps(record, ensure_ascii=False), ex=ttl_seconds)
                 pipe.sadd(subject_key, token_hash)
                 pipe.expire(subject_key, ttl_seconds + 60)
+                if key_id_key:
+                    pipe.sadd(key_id_key, token_hash)
+                    pipe.expire(key_id_key, ttl_seconds + 60)
                 pipe.execute()
                 return raw_token, expires_at
             except Exception:
@@ -189,12 +197,16 @@ class RefreshTokenStore:
                     try:
                         data = json.loads(raw)
                         subject = str(data.get("subject") or "")
+                        key_id = str(data.get("key_id") or "")
                     except Exception:
                         subject = ""
+                        key_id = ""
                     pipe = client.pipeline()
                     pipe.delete(self._redis_key(token_hash))
                     if subject:
                         pipe.srem(self._redis_subject_key(subject), token_hash)
+                    if key_id:
+                        pipe.srem(self._redis_key_id_key(key_id), token_hash)
                     pipe.execute()
                 else:
                     client.delete(self._redis_key(token_hash))
@@ -224,6 +236,27 @@ class RefreshTokenStore:
                 logger.debug("Refresh token Redis revoke_subject failed; falling back to file")
 
         return self._revoke_subject_file(subject)
+
+    def revoke_key_id(self, key_id: str) -> int:
+        key_id = str(key_id or "").strip()
+        if not key_id:
+            return 0
+
+        client = self._redis()
+        if client is not None:
+            try:
+                key_id_key = self._redis_key_id_key(key_id)
+                hashes = list(client.smembers(key_id_key) or [])
+                pipe = client.pipeline()
+                for token_hash in hashes:
+                    pipe.delete(self._redis_key(str(token_hash)))
+                pipe.delete(key_id_key)
+                pipe.execute()
+                return len(hashes)
+            except Exception:
+                logger.debug("Refresh token Redis revoke_key_id failed; falling back to file")
+
+        return self._revoke_key_id_file(key_id)
 
     def _lock_path(self) -> Path:
         return self._path.with_suffix(self._path.suffix + ".lock")
@@ -374,3 +407,16 @@ class RefreshTokenStore:
             self._save_file_unlocked(records)
             return deleted
 
+    def _revoke_key_id_file(self, key_id: str) -> int:
+        with self._file_lock():
+            now = time.time()
+            records = self._load_file_unlocked()
+            records = self._prune_expired(records, now=now)
+            deleted = 0
+            for token_hash in list(records.keys()):
+                record = records.get(token_hash) or {}
+                if str(record.get("key_id") or "") == key_id:
+                    records.pop(token_hash, None)
+                    deleted += 1
+            self._save_file_unlocked(records)
+            return deleted

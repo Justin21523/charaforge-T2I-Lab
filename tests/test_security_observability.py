@@ -359,3 +359,43 @@ async def test_jwt_token_exchange_refresh_and_bearer_auth(make_app):
         blocked = await client.post("/api/v1/auth/token", headers={"Authorization": bearer["Authorization"]})
         assert blocked.status_code == 401
         _assert_error_schema(blocked)
+
+
+@pytest.mark.anyio
+async def test_revoking_key_revokes_refresh_tokens(make_app):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_JWT_ACCESS_TTL_SECONDS="60",
+        API_JWT_REFRESH_TTL_SECONDS="3600",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/v1/auth/keys",
+            json={"role": "user", "scopes": ["datasets:read"], "label": "revocation_test"},
+            headers={"X-API-Key": "admin_key"},
+        )
+        assert created.status_code == 200
+        created_payload = created.json()
+        key_id = created_payload["key_id"]
+        raw_key = created_payload["key"]
+
+        issued = await client.post("/api/v1/auth/token", headers={"X-API-Key": raw_key})
+        assert issued.status_code == 200
+        refresh_token = issued.json()["refresh_token"]
+
+        revoked = await client.post(
+            f"/api/v1/auth/keys/{key_id}/revoke", headers={"X-API-Key": "admin_key"}
+        )
+        assert revoked.status_code == 200
+        assert int(revoked.json().get("revoked_refresh_tokens") or 0) >= 1
+
+        refreshed = await client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": refresh_token}
+        )
+        assert refreshed.status_code == 401
+        _assert_error_schema(refreshed)
