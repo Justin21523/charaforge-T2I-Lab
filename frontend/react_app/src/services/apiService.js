@@ -6,6 +6,13 @@ const API_KEY_HEADER = import.meta.env.VITE_API_KEY_HEADER || "X-API-Key";
 
 const STORAGE_API_KEY = "charaforge.apiKey";
 const STORAGE_API_KEY_HEADER = "charaforge.apiKeyHeader";
+const STORAGE_USE_JWT = "charaforge.auth.useJwt";
+const STORAGE_JWT_ACCESS_TOKEN = "charaforge.jwt.accessToken";
+const STORAGE_JWT_EXPIRES_AT = "charaforge.jwt.expiresAt";
+const STORAGE_JWT_REFRESH_TOKEN = "charaforge.jwt.refreshToken";
+const STORAGE_JWT_REFRESH_EXPIRES_AT = "charaforge.jwt.refreshExpiresAt";
+const STORAGE_JWT_ROLE = "charaforge.jwt.role";
+const STORAGE_JWT_SCOPES = "charaforge.jwt.scopes";
 
 const readStoredJson = (key, fallback) => {
   try {
@@ -35,15 +42,22 @@ class APIService {
   constructor() {
     this.apiKeyHeader = readStoredJson(STORAGE_API_KEY_HEADER, API_KEY_HEADER) || API_KEY_HEADER;
     this.apiKey = readStoredJson(STORAGE_API_KEY, "") || "";
+    this.useJwt = Boolean(readStoredJson(STORAGE_USE_JWT, false));
+    this.accessToken = readStoredJson(STORAGE_JWT_ACCESS_TOKEN, "") || "";
+    this.accessExpiresAt = Number(readStoredJson(STORAGE_JWT_EXPIRES_AT, 0) || 0);
+    this.refreshToken = readStoredJson(STORAGE_JWT_REFRESH_TOKEN, "") || "";
+    this.refreshExpiresAt = Number(readStoredJson(STORAGE_JWT_REFRESH_EXPIRES_AT, 0) || 0);
+    this.jwtRole = readStoredJson(STORAGE_JWT_ROLE, "") || "";
+    this.jwtScopes = readStoredJson(STORAGE_JWT_SCOPES, []) || [];
+    this._refreshPromise = null;
 
-    const defaultHeaders = {
-      "Content-Type": "application/json",
-    };
-    if (this.apiKey) {
-      defaultHeaders[this.apiKeyHeader] = this.apiKey;
-    }
-
+    const defaultHeaders = { "Content-Type": "application/json" };
     this.client = axios.create({
+      baseURL: API_BASE_URL,
+      timeout: 30000,
+      headers: defaultHeaders,
+    });
+    this.authClient = axios.create({
       baseURL: API_BASE_URL,
       timeout: 30000,
       headers: defaultHeaders,
@@ -52,6 +66,43 @@ class APIService {
     // Request interceptor
     this.client.interceptors.request.use(
       (config) => {
+        const url = String(config?.url || "");
+        const isTokenEndpoint = url.includes("/api/v1/auth/token");
+        const isRefreshEndpoint = url.includes("/api/v1/auth/refresh");
+        const isLogoutEndpoint = url.includes("/api/v1/auth/logout");
+
+        const headers = config.headers || {};
+
+        const dropHeader = (name) => {
+          try {
+            delete headers[name];
+          } catch (e) {
+            // ignore
+          }
+        };
+
+        if (isTokenEndpoint) {
+          dropHeader("Authorization");
+          if (this.apiKey) {
+            headers[this.apiKeyHeader] = this.apiKey;
+          } else {
+            dropHeader(this.apiKeyHeader);
+          }
+        } else if (isRefreshEndpoint || isLogoutEndpoint) {
+          dropHeader("Authorization");
+          dropHeader(this.apiKeyHeader);
+        } else if (this.useJwt && this.accessToken) {
+          headers.Authorization = `Bearer ${this.accessToken}`;
+          dropHeader(this.apiKeyHeader);
+        } else if (this.apiKey) {
+          headers[this.apiKeyHeader] = this.apiKey;
+          dropHeader("Authorization");
+        } else {
+          dropHeader("Authorization");
+          dropHeader(this.apiKeyHeader);
+        }
+
+        config.headers = headers;
         console.log(
           `API Request: ${config.method?.toUpperCase()} ${config.url}`
         );
@@ -67,13 +118,43 @@ class APIService {
       (response) => {
         return response.data;
       },
-      (error) => {
+      async (error) => {
         console.error("API Error:", error);
+
+        const status = error.response?.status || 0;
+        const originalConfig = error.config || null;
+        const url = String(originalConfig?.url || "");
+        const isAuthEndpoint =
+          url.includes("/api/v1/auth/token") ||
+          url.includes("/api/v1/auth/refresh") ||
+          url.includes("/api/v1/auth/logout");
+
+        if (
+          status === 401 &&
+          !isAuthEndpoint &&
+          originalConfig &&
+          !originalConfig._jwtRetry &&
+          this.useJwt &&
+          this.refreshToken
+        ) {
+          originalConfig._jwtRetry = true;
+          try {
+            await this.refreshJwtSession();
+            return await this.client.request(originalConfig);
+          } catch (refreshError) {
+            this.clearJwtSession();
+            if (this.apiKey && !originalConfig._apiKeyRetry) {
+              originalConfig._apiKeyRetry = true;
+              return await this.client.request(originalConfig);
+            }
+            // fall through to formatted error
+          }
+        }
+
         const data = error.response?.data || {};
         const requestId =
           data?.request_id || error.response?.headers?.["x-request-id"] || "";
 
-        const status = error.response?.status || 0;
         const code = typeof data?.error === "string" ? data.error : "";
         const details =
           data && typeof data === "object" && data.details && typeof data.details === "object"
@@ -97,6 +178,46 @@ class APIService {
     );
   }
 
+  setUseJwt(enabled) {
+    this.useJwt = Boolean(enabled);
+    writeStoredJson(STORAGE_USE_JWT, this.useJwt);
+    if (!this.useJwt) {
+      this.clearJwtSession();
+    }
+  }
+
+  getUseJwt() {
+    return Boolean(this.useJwt);
+  }
+
+  hasJwtSession() {
+    return Boolean(this.accessToken && this.refreshToken);
+  }
+
+  getJwtInfo() {
+    return {
+      enabled: Boolean(this.useJwt),
+      accessToken: this.accessToken || "",
+      expiresAt: Number(this.accessExpiresAt || 0),
+      refreshToken: this.refreshToken || "",
+      refreshExpiresAt: Number(this.refreshExpiresAt || 0),
+      role: this.jwtRole || "",
+      scopes: Array.isArray(this.jwtScopes) ? this.jwtScopes : [],
+    };
+  }
+
+  getAuthHeaders() {
+    const headers = {};
+    if (this.useJwt && this.accessToken) {
+      headers.Authorization = `Bearer ${this.accessToken}`;
+      return headers;
+    }
+    if (this.apiKey) {
+      headers[this.apiKeyHeader] = this.apiKey;
+    }
+    return headers;
+  }
+
   getApiKey() {
     return this.apiKey || "";
   }
@@ -112,22 +233,112 @@ class APIService {
     this.apiKey = apiKey || "";
     this.apiKeyHeader = nextHeader;
 
-    if (prevHeader && prevHeader !== nextHeader) {
-      delete this.client.defaults.headers.common[prevHeader];
-    }
-
-    if (this.apiKey) {
-      this.client.defaults.headers.common[this.apiKeyHeader] = this.apiKey;
-    } else {
-      delete this.client.defaults.headers.common[this.apiKeyHeader];
-    }
-
     writeStoredJson(STORAGE_API_KEY, this.apiKey);
     writeStoredJson(STORAGE_API_KEY_HEADER, this.apiKeyHeader);
   }
 
   clearApiKey() {
     this.setApiKey("");
+  }
+
+  _setJwtSession(payload) {
+    const accessToken = payload?.access_token || "";
+    const expiresAt = Number(payload?.expires_at || 0);
+    const refreshToken = payload?.refresh_token || "";
+    const refreshExpiresAt = Number(payload?.refresh_expires_at || 0);
+    const role = payload?.role || "";
+    const scopes = Array.isArray(payload?.scopes) ? payload.scopes : [];
+
+    this.accessToken = accessToken;
+    this.accessExpiresAt = expiresAt;
+    this.refreshToken = refreshToken;
+    this.refreshExpiresAt = refreshExpiresAt;
+    this.jwtRole = role;
+    this.jwtScopes = scopes;
+
+    writeStoredJson(STORAGE_JWT_ACCESS_TOKEN, accessToken);
+    writeStoredJson(STORAGE_JWT_EXPIRES_AT, expiresAt);
+    writeStoredJson(STORAGE_JWT_REFRESH_TOKEN, refreshToken);
+    writeStoredJson(STORAGE_JWT_REFRESH_EXPIRES_AT, refreshExpiresAt);
+    writeStoredJson(STORAGE_JWT_ROLE, role);
+    writeStoredJson(STORAGE_JWT_SCOPES, scopes);
+  }
+
+  clearJwtSession() {
+    this.accessToken = "";
+    this.accessExpiresAt = 0;
+    this.refreshToken = "";
+    this.refreshExpiresAt = 0;
+    this.jwtRole = "";
+    this.jwtScopes = [];
+    writeStoredJson(STORAGE_JWT_ACCESS_TOKEN, "");
+    writeStoredJson(STORAGE_JWT_EXPIRES_AT, 0);
+    writeStoredJson(STORAGE_JWT_REFRESH_TOKEN, "");
+    writeStoredJson(STORAGE_JWT_REFRESH_EXPIRES_AT, 0);
+    writeStoredJson(STORAGE_JWT_ROLE, "");
+    writeStoredJson(STORAGE_JWT_SCOPES, []);
+  }
+
+  async exchangeApiKeyForToken() {
+    if (!this.apiKey) {
+      throw new Error("Missing API key");
+    }
+    try {
+      const headers = { [this.apiKeyHeader]: this.apiKey };
+      const res = await this.authClient.post("/api/v1/auth/token", null, { headers });
+      this._setJwtSession(res.data);
+      return res.data;
+    } catch (error) {
+      const data = error.response?.data || {};
+      const requestId =
+        data?.request_id || error.response?.headers?.["x-request-id"] || "";
+      const message =
+        (typeof data?.message === "string" && data.message) ||
+        error.message ||
+        "JWT token exchange failed";
+      const withRequestId = requestId ? `${message} (request_id=${requestId})` : message;
+      throw new Error(withRequestId);
+    }
+  }
+
+  async refreshJwtSession() {
+    if (!this.refreshToken) {
+      throw new Error("Missing refresh token");
+    }
+    if (this._refreshPromise) {
+      return await this._refreshPromise;
+    }
+
+    this._refreshPromise = (async () => {
+      const res = await this.authClient.post("/api/v1/auth/refresh", {
+        refresh_token: this.refreshToken,
+      });
+      this._setJwtSession(res.data);
+      return res.data;
+    })();
+
+    try {
+      return await this._refreshPromise;
+    } finally {
+      this._refreshPromise = null;
+    }
+  }
+
+  async logoutJwt({ all = false } = {}) {
+    const refreshToken = this.refreshToken;
+    this.clearJwtSession();
+    if (!refreshToken) {
+      return { status: "ok", revoked: true, count: 0 };
+    }
+    try {
+      const res = await this.authClient.post("/api/v1/auth/logout", {
+        refresh_token: refreshToken,
+        all: Boolean(all),
+      });
+      return res.data;
+    } catch (error) {
+      return { status: "error", message: error.message };
+    }
   }
 
   // Health check
@@ -229,9 +440,6 @@ class APIService {
     const uploadHeaders = {
       "Content-Type": "multipart/form-data",
     };
-    if (this.apiKey) {
-      uploadHeaders[this.apiKeyHeader] = this.apiKey;
-    }
 
     return await this.client.post("/api/v1/upload", formData, {
       headers: {

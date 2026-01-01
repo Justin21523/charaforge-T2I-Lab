@@ -1,7 +1,7 @@
 // frontend/react_app/src/components/common/Header.jsx
 import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Activity, KeyRound, Palette, X } from "lucide-react";
+import { Activity, KeyRound, LogIn, LogOut, Palette, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { useAPI } from "../../hooks/useAPI";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -16,6 +16,7 @@ const Header = () => {
     "charaforge.apiKeyHeader",
     "X-API-Key"
   );
+  const [useJwt, setUseJwt] = useLocalStorage("charaforge.auth.useJwt", false);
 
   const maskedKey = useMemo(() => {
     if (!storedApiKey) return "";
@@ -25,9 +26,21 @@ const Header = () => {
 
   const toggleAuthPanel = () => setIsAuthOpen((prev) => !prev);
 
-  const handleSaveAuth = () => {
+  const handleSaveAuth = async () => {
     apiService.setApiKey(storedApiKey, storedHeaderName);
-    toast.success(storedApiKey ? "API Key 已更新" : "API Key 已清除");
+    apiService.setUseJwt(Boolean(useJwt));
+
+    if (useJwt && storedApiKey) {
+      try {
+        await apiService.exchangeApiKeyForToken();
+        toast.success("JWT 已登入");
+      } catch (error) {
+        toast.error(error?.message || "JWT 登入失敗");
+      }
+    } else if (!useJwt) {
+      toast.success(storedApiKey ? "API Key 已更新" : "API Key 已清除");
+    }
+
     checkHealth();
     setIsAuthOpen(false);
   };
@@ -38,6 +51,19 @@ const Header = () => {
     toast.success("API Key 已清除");
     checkHealth();
   };
+
+  const handleLogoutJwt = async (all) => {
+    try {
+      await apiService.logoutJwt({ all: Boolean(all) });
+      toast.success(all ? "JWT 已登出（全部）" : "JWT 已登出");
+      checkHealth();
+    } catch (error) {
+      toast.error(error?.message || "登出失敗");
+    }
+  };
+
+  const jwtInfo = apiService.getJwtInfo();
+  const jwtLoggedIn = Boolean(jwtInfo?.accessToken && jwtInfo?.refreshToken);
 
   return (
     <header className="header">
@@ -101,6 +127,69 @@ const Header = () => {
                   type="password"
                   autoComplete="off"
                 />
+
+                <label className="auth-label" htmlFor="auth_use_jwt">
+                  JWT 模式
+                </label>
+                <div className="auth-panel-toggle">
+                  <input
+                    id="auth_use_jwt"
+                    type="checkbox"
+                    checked={Boolean(useJwt)}
+                    onChange={(e) => setUseJwt(e.target.checked)}
+                  />
+                  <span className="auth-panel-toggle-text">
+                    使用 JWT（建議：前端改送 Bearer，不再每次送 API Key）
+                  </span>
+                </div>
+
+                {useJwt && (
+                  <div className="auth-jwt-card">
+                    <div className="auth-jwt-status">
+                      狀態：{jwtLoggedIn ? "已登入" : "未登入"}
+                      {jwtLoggedIn && jwtInfo?.role ? `（${jwtInfo.role}）` : ""}
+                    </div>
+                    <div className="auth-jwt-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={async () => {
+                          try {
+                            await apiService.exchangeApiKeyForToken();
+                            toast.success("JWT 已登入");
+                            checkHealth();
+                          } catch (error) {
+                            toast.error(error?.message || "JWT 登入失敗");
+                          }
+                        }}
+                        disabled={!storedApiKey}
+                        title={!storedApiKey ? "請先填入 API key" : "用 API key 換取 JWT"}
+                      >
+                        <LogIn size={14} />
+                        登入
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleLogoutJwt(false)}
+                        disabled={!jwtLoggedIn}
+                      >
+                        <LogOut size={14} />
+                        登出
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleLogoutJwt(true)}
+                        disabled={!jwtLoggedIn}
+                        title="撤銷此帳號下的所有 refresh token"
+                      >
+                        <LogOut size={14} />
+                        全部登出
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="auth-panel-actions">
                   <button

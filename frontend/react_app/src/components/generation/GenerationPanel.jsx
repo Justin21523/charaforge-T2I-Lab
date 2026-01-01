@@ -190,10 +190,14 @@ const GenerationPanel = () => {
     if (!image) return;
 
     try {
-      const headers = {};
-      const apiKey = apiService.getApiKey();
-      if (apiKey) {
-        headers[apiService.getApiKeyHeader()] = apiKey;
+      let headers = {};
+      try {
+        const url = new URL(image.path);
+        if (!url.searchParams.has("img_token")) {
+          headers = apiService.getAuthHeaders();
+        }
+      } catch (e) {
+        headers = apiService.getAuthHeaders();
       }
 
       const response = await fetch(image.path, {

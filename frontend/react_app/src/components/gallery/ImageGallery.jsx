@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Image as ImageIcon, Download, Trash2, Eye, Grid, List } from 'lucide-react';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import apiService from '../../services/apiService';
 import { downloadBlob } from '../../utils/helpers';
 import ImageCard from './ImageCard';
 import Loading from '../common/Loading';
@@ -76,7 +77,18 @@ const ImageGallery = () => {
     }
 
     try {
-      const response = await fetch(currentImage.path);
+      let headers = {};
+      try {
+        const url = new URL(currentImage.path);
+        if (!url.searchParams.has('img_token')) {
+          headers = apiService.getAuthHeaders();
+        }
+      } catch (e) {
+        headers = apiService.getAuthHeaders();
+      }
+      const response = await fetch(currentImage.path, {
+        headers: Object.keys(headers).length ? headers : undefined,
+      });
       const blob = await response.blob();
       const filename = `gallery-${currentImage.id}-${Date.now()}.png`;
       downloadBlob(blob, filename);
@@ -95,12 +107,34 @@ const ImageGallery = () => {
 
     setIsLoading(true);
     try {
+      let headers = {};
+      try {
+        if (images.length > 0) {
+          const url = new URL(images[0].path);
+          if (!url.searchParams.has('img_token')) {
+            headers = apiService.getAuthHeaders();
+          }
+        }
+      } catch (e) {
+        headers = apiService.getAuthHeaders();
+      }
       // Note: This would need a backend endpoint to create a zip file
       // For now, download images individually
       for (const imageId of selectedImages) {
         const image = images.find(img => img.id === imageId);
         if (image) {
-          const response = await fetch(image.path);
+          let imageHeaders = headers;
+          try {
+            const url = new URL(image.path);
+            if (url.searchParams.has('img_token')) {
+              imageHeaders = {};
+            }
+          } catch (e) {
+            // ignore
+          }
+          const response = await fetch(image.path, {
+            headers: Object.keys(imageHeaders).length ? imageHeaders : undefined,
+          });
           const blob = await response.blob();
           const filename = `gallery-${image.id}.png`;
           downloadBlob(blob, filename);
