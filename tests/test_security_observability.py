@@ -199,12 +199,30 @@ async def test_metrics_endpoint_when_enabled(make_app):
     app = make_app(
         PROMETHEUS_ENABLED="true",
         API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key",
         API_RATE_LIMIT="0",
         API_SCAN_RATE_LIMIT="0",
         API_T2I_WORKER_ENABLED="false",
     )
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        user = await client.get("/api/v1/metrics", headers={"X-API-Key": "user_key"})
+        assert user.status_code == 403
+        _assert_error_schema(user)
+
+        scoped = await client.post(
+            "/api/v1/auth/keys",
+            json={"role": "user", "scopes": ["metrics:read"], "label": "metrics"},
+            headers={"X-API-Key": "admin_key"},
+        )
+        assert scoped.status_code == 200
+        scoped_key = scoped.json()["key"]
+
+        ok = await client.get("/api/v1/metrics", headers={"X-API-Key": scoped_key})
+        assert ok.status_code == 200
+        assert ok.headers.get("content-type", "").startswith("text/plain")
+        assert "charaforge_http_requests_total" in ok.text
+
         res = await client.get("/api/v1/metrics", headers={"X-API-Key": "admin_key"})
         assert res.status_code == 200
         assert res.headers.get("content-type", "").startswith("text/plain")

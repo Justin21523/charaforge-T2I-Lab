@@ -68,6 +68,8 @@ def _error_payload(
 
 
 def _required_scope(path: str, method: str) -> str | None:
+    if path == f"{API_V1_PREFIX}/metrics":
+        return "metrics:read"
     if path == f"{API_V1_PREFIX}/models/scan":
         return "models:scan"
     if path.startswith(f"{API_V1_PREFIX}/models/"):
@@ -255,6 +257,18 @@ def create_app() -> FastAPI:
                             "# TYPE charaforge_t2i_jobs_running gauge\n"
                             f"charaforge_t2i_jobs_running {running}\n"
                         )
+                    if manager is not None and hasattr(manager, "global_slot_usage"):
+                        usage = manager.global_slot_usage()
+                        used = int(usage.get("used", 0))
+                        total = int(usage.get("max", 0))
+                        body += (
+                            "# HELP charaforge_t2i_gpu_slots_used Used T2I GPU slots.\n"
+                            "# TYPE charaforge_t2i_gpu_slots_used gauge\n"
+                            f"charaforge_t2i_gpu_slots_used {used}\n"
+                            "# HELP charaforge_t2i_gpu_slots_total Configured T2I GPU slots.\n"
+                            "# TYPE charaforge_t2i_gpu_slots_total gauge\n"
+                            f"charaforge_t2i_gpu_slots_total {total}\n"
+                        )
                 except Exception:
                     pass
 
@@ -355,6 +369,8 @@ def create_app() -> FastAPI:
                 except Exception:
                     pass
 
+        metrics = getattr(request.app.state, "metrics", None)
+
         rate_client_key = request.state.client_key
         global_rate_limit = int(settings.api.rate_limit or 0)
 
@@ -379,6 +395,11 @@ def create_app() -> FastAPI:
             )
             if not global_result.allowed:
                 retry_after = max(0, global_result.reset_epoch - int(time.time()))
+                if metrics is not None:
+                    try:
+                        metrics.inc_rate_limited(bucket="global")
+                    except Exception:
+                        pass
                 return JSONResponse(
                     status_code=429,
                     content=_error_payload(
@@ -410,6 +431,11 @@ def create_app() -> FastAPI:
             )
             if not bucket_result.allowed:
                 retry_after = max(0, bucket_result.reset_epoch - int(time.time()))
+                if metrics is not None:
+                    try:
+                        metrics.inc_rate_limited(bucket=str(special_bucket))
+                    except Exception:
+                        pass
                 headers: dict[str, str] = {
                     "Retry-After": str(retry_after),
                     "X-RateLimit-Bucket": special_bucket,
@@ -466,7 +492,7 @@ def create_app() -> FastAPI:
                                     details={"required": required_scope},
                                 ),
                             )
-                    elif required_scope == "models:scan" and getattr(request.state, "auth_role", "") != "admin":
+                    elif required_scope in {"models:scan", "metrics:read"} and getattr(request.state, "auth_role", "") != "admin":
                         return JSONResponse(
                             status_code=403,
                             content=_error_payload(

@@ -118,6 +118,12 @@ def _enforce_t2i_cost_limit(
         return
 
     retry_after = max(0, result.reset_epoch - int(time.time()))
+    metrics = getattr(request.app.state, "metrics", None)
+    if metrics is not None:
+        try:
+            metrics.inc_rate_limited(bucket="t2i_cost")
+        except Exception:
+            pass
     raise HTTPException(
         status_code=429,
         detail={

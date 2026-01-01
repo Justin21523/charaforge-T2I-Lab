@@ -22,6 +22,7 @@ class Metrics:
         self._requests_total: Dict[Tuple[str, str, int], int] = {}
         self._duration_sum: Dict[Tuple[str, str], float] = {}
         self._duration_count: Dict[Tuple[str, str], int] = {}
+        self._rate_limit_denied_total: Dict[str, int] = {}
 
     def inc_in_flight(self) -> None:
         with self._lock:
@@ -45,6 +46,11 @@ class Metrics:
             self._duration_sum[key_latency] = self._duration_sum.get(key_latency, 0.0) + duration_s
             self._duration_count[key_latency] = self._duration_count.get(key_latency, 0) + 1
 
+    def inc_rate_limited(self, *, bucket: str) -> None:
+        bucket = str(bucket or "global")
+        with self._lock:
+            self._rate_limit_denied_total[bucket] = self._rate_limit_denied_total.get(bucket, 0) + 1
+
     def render_prometheus(self) -> str:
         lines: list[str] = []
         with self._lock:
@@ -52,6 +58,7 @@ class Metrics:
             requests_total = dict(self._requests_total)
             duration_sum = dict(self._duration_sum)
             duration_count = dict(self._duration_count)
+            rate_limit_denied_total = dict(self._rate_limit_denied_total)
 
         lines.append("# HELP charaforge_http_in_flight_requests In-flight HTTP requests.")
         lines.append("# TYPE charaforge_http_in_flight_requests gauge")
@@ -80,5 +87,12 @@ class Metrics:
                 f'{{method="{_escape_label(method)}",route="{_escape_label(route)}"}} {value}'
             )
 
-        return "\n".join(lines) + "\n"
+        lines.append("# HELP charaforge_rate_limit_denied_total Rate-limited requests.")
+        lines.append("# TYPE charaforge_rate_limit_denied_total counter")
+        for bucket, value in sorted(rate_limit_denied_total.items()):
+            lines.append(
+                "charaforge_rate_limit_denied_total"
+                f'{{bucket="{_escape_label(bucket)}"}} {value}'
+            )
 
+        return "\n".join(lines) + "\n"

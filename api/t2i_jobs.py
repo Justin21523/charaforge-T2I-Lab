@@ -776,6 +776,20 @@ class _RedisBackend:
         except Exception:
             return
 
+    def slot_usage(self) -> Dict[str, int]:
+        max_slots = int(self._max_global_concurrent or 0)
+        if max_slots <= 0:
+            return {"used": 0, "max": 0}
+        try:
+            pipe = self._client.pipeline()
+            for index in range(1, max_slots + 1):
+                pipe.exists(self._slot_key(index))
+            results = pipe.execute()
+            used = sum(1 for item in results if int(item or 0) > 0)
+            return {"used": used, "max": max_slots}
+        except Exception:
+            return {"used": 0, "max": max_slots}
+
     def _job_lock_ttl_seconds(self) -> int:
         base = int(self._stale_seconds or 0)
         if base > 0:
@@ -1391,6 +1405,12 @@ class T2IJobManager:
 
     def global_counts(self) -> Dict[str, int]:
         return self._backend.global_counts()
+
+    def global_slot_usage(self) -> Dict[str, int]:
+        backend = self._backend
+        if isinstance(backend, _RedisBackend):
+            return backend.slot_usage()
+        return {"used": 0, "max": 0}
 
     def list_jobs(
         self, *, owner: str | None = None, limit: int = 50, status: str | None = None

@@ -138,7 +138,7 @@ curl -s -X POST http://localhost:8000/api/v1/auth/refresh \\
 ### Monitoring (Optional)
 
 - JSON request logs: set `LOG_JSON=true`.
-- Prometheus: set `PROMETHEUS_ENABLED=true` to expose `GET /api/v1/metrics` (uses in-process counters).
+- Prometheus: set `PROMETHEUS_ENABLED=true` to expose `GET /api/v1/metrics` (requires `admin` or `metrics:read` scope when auth is enabled).
 - Sentry: set `SENTRY_DSN` (requires `sentry-sdk` installed in your environment).
 
 ### Celery (Optional)
