@@ -240,6 +240,11 @@ class APIConfig(BaseSettings):
     t2i_worker_enabled: bool = Field(
         default=True, validation_alias=AliasChoices("T2I_WORKER_ENABLED", "API_T2I_WORKER_ENABLED")
     )
+    t2i_dispatch_mode: str = Field(
+        default="redis",
+        pattern="^(redis|celery)$",
+        validation_alias=AliasChoices("T2I_DISPATCH_MODE", "API_T2I_DISPATCH_MODE"),
+    )
     t2i_job_ttl_seconds: int = Field(
         default=86400, ge=0, validation_alias=AliasChoices("T2I_JOB_TTL_SECONDS", "API_T2I_JOB_TTL_SECONDS")
     )

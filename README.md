@@ -91,6 +91,7 @@ npm run dev
 - Cost-based throttles: `API_T2I_COST_RATE_LIMIT` (cost units/minute, 0 disables).
 - Output cleanup: `API_T2I_OUTPUT_TTL_SECONDS` (seconds, 0 disables), plus `POST /api/v1/t2i/jobs/cleanup`.
 - T2I queue/concurrency: per-owner `API_T2I_MAX_CONCURRENT`/`API_T2I_MAX_QUEUE`, global `API_T2I_MAX_GLOBAL_CONCURRENT`/`API_T2I_MAX_GLOBAL_QUEUE`.
+- Optional Celery dispatch: set `API_T2I_DISPATCH_MODE=celery` and run a worker that consumes `t2i` tasks (example below).
 - Frontend: set the API key in the header UI (stored in localStorage) instead of baking it into build env vars.
 - Optional JWT: exchange an API key once (`POST /api/v1/auth/token`) then use `Authorization: Bearer ...` for subsequent calls; refresh via `POST /api/v1/auth/refresh` (no API key needed).
 - JWT TTL: `API_JWT_ACCESS_TTL_SECONDS` and `API_JWT_REFRESH_TTL_SECONDS`.
@@ -139,6 +140,13 @@ curl -s -X POST http://localhost:8000/api/v1/auth/refresh \\
 - JSON request logs: set `LOG_JSON=true`.
 - Prometheus: set `PROMETHEUS_ENABLED=true` to expose `GET /api/v1/metrics` (uses in-process counters).
 - Sentry: set `SENTRY_DSN` (requires `sentry-sdk` installed in your environment).
+
+### Celery (Optional)
+
+```bash
+# T2I worker (Celery task mode)
+celery -A workers.celery_app worker -Q t2i --concurrency 1 --loglevel=info
+```
 
 ## Docker
 

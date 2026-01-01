@@ -44,7 +44,19 @@ def _job_manager(request: Request) -> T2IJobManager:
     manager = getattr(request.app.state, "t2i_job_manager", None)
     if isinstance(manager, T2IJobManager):
         return manager
-    manager = T2IJobManager(redis_url=getattr(request.app.state, "redis_url", None))
+    settings = get_settings()
+    dispatch_mode = str(settings.api.t2i_dispatch_mode or "redis").lower()
+    worker_enabled = bool(settings.api.t2i_worker_enabled) and dispatch_mode != "celery"
+    manager = T2IJobManager(
+        redis_url=getattr(request.app.state, "redis_url", None),
+        worker_enabled=worker_enabled,
+        dispatch_mode=dispatch_mode,
+        job_ttl_seconds=int(settings.api.t2i_job_ttl_seconds or 0),
+        stale_seconds=int(settings.api.t2i_job_stale_seconds or 0),
+        max_attempts=int(settings.api.t2i_job_max_attempts or 1),
+        max_concurrent_per_owner=int(settings.api.t2i_max_concurrent or 1),
+        max_global_concurrent=int(settings.api.t2i_max_global_concurrent or 0),
+    )
     request.app.state.t2i_job_manager = manager
     return manager
 

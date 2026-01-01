@@ -71,12 +71,14 @@ celery_app.conf.update(
     # Task routing
     task_routes={
         "workers.tasks.training.*": {"queue": "training"},
+        "workers.tasks.t2i.*": {"queue": "t2i"},
     },
     # Queues
     task_default_queue="default",
     task_queues=(
         Queue("default", routing_key="default"),
         Queue("training", routing_key="training"),
+        Queue("t2i", routing_key="t2i"),
     ),
     # Worker settings
     worker_prefetch_multiplier=1,
@@ -103,6 +105,13 @@ try:
     print("✅ Loaded tasks: workers.tasks.training")
 except Exception as e:
     print(f"⚠️ Failed to load training tasks: {e}")
+
+try:
+    import workers.tasks.t2i  # noqa: F401
+
+    print("✅ Loaded tasks: workers.tasks.t2i")
+except Exception as e:
+    print(f"⚠️ Failed to load t2i tasks: {e}")
 
 # ===== Celery Events and Signals =====
 

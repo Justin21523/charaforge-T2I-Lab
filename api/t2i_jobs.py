@@ -467,6 +467,7 @@ class _RedisBackend:
         max_attempts: int = 2,
         max_concurrent_per_owner: int = 1,
         max_global_concurrent: int = 0,
+        dispatch_mode: str = "redis",
         worker_enabled: bool = True,
     ):
         if redis is None:
@@ -480,6 +481,9 @@ class _RedisBackend:
         self._max_concurrent_per_owner = int(max_concurrent_per_owner)
         self._max_global_concurrent = int(max_global_concurrent)
         self._worker_enabled = bool(worker_enabled)
+        self._dispatch_mode = str(dispatch_mode or "redis").lower()
+        if self._dispatch_mode not in {"redis", "celery"}:
+            self._dispatch_mode = "redis"
 
         self._worker_id = uuid.uuid4().hex
         self._stop_event = threading.Event()
@@ -545,13 +549,39 @@ class _RedisBackend:
         payload = json.dumps(record, ensure_ascii=False)
         pipe = self._client.pipeline()
         pipe.set(self._job_key(job_id), payload)
-        pipe.rpush(self._queue_key(), job_id)
+        if self._dispatch_mode == "redis":
+            pipe.rpush(self._queue_key(), job_id)
+        pipe.sadd(self._global_queued_key(), job_id)
         pipe.sadd(self._owner_queued_key(owner), job_id)
         pipe.zadd(self._jobs_index_key(), {job_id: now})
         pipe.zadd(self._owner_jobs_index_key(owner), {job_id: now})
         pipe.execute()
 
+        if self._dispatch_mode == "celery":
+            try:
+                self._dispatch_celery(job_id)
+            except Exception:
+                self.delete_job(job_id)
+                raise
+
         return job_id
+
+    def _dispatch_celery(self, job_id: str) -> None:
+        """Enqueue a Celery task to process the given job id."""
+
+        try:
+            from workers.celery_app import celery_app  # type: ignore
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError("Celery is not available") from exc
+
+        try:
+            celery_app.send_task(  # type: ignore[attr-defined]
+                "workers.tasks.t2i.process_t2i_job",
+                args=[job_id],
+                queue="t2i",
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to enqueue Celery task: {exc}") from exc
 
     def cancel(self, job_id: str) -> Dict[str, Any] | None:
         record = self._load_job(job_id)
@@ -571,6 +601,8 @@ class _RedisBackend:
             record["error"] = {"error": "CANCELED", "message": "Canceled"}
             pipe = self._client.pipeline()
             pipe.lrem(self._queue_key(), 0, job_id)
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.srem(self._global_running_key(), job_id)
             if owner:
                 pipe.srem(self._owner_queued_key(owner), job_id)
                 pipe.srem(self._owner_running_key(owner), job_id)
@@ -605,10 +637,10 @@ class _RedisBackend:
     def global_counts(self) -> Dict[str, int]:
         try:
             pipe = self._client.pipeline()
-            pipe.llen(self._queue_key())
-            pipe.llen(self._processing_key())
-            queued, processing = pipe.execute()
-            return {"queued": int(queued or 0), "running": int(processing or 0)}
+            pipe.scard(self._global_queued_key())
+            pipe.scard(self._global_running_key())
+            queued, running = pipe.execute()
+            return {"queued": int(queued or 0), "running": int(running or 0)}
         except Exception:
             return {"queued": 0, "running": 0}
 
@@ -660,6 +692,8 @@ class _RedisBackend:
             pipe.delete(self._cancel_key(job_id))
             pipe.lrem(self._queue_key(), 0, job_id)
             pipe.lrem(self._processing_key(), 0, job_id)
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.srem(self._global_running_key(), job_id)
             pipe.zrem(self._jobs_index_key(), job_id)
             if owner:
                 pipe.srem(self._owner_queued_key(owner), job_id)
@@ -742,6 +776,46 @@ class _RedisBackend:
         except Exception:
             return
 
+    def _job_lock_ttl_seconds(self) -> int:
+        base = int(self._stale_seconds or 0)
+        if base > 0:
+            return max(60, min(300, base))
+        return 300
+
+    def _acquire_job_lock(self, job_id: str, worker_id: str) -> bool:
+        key = self._job_lock_key(job_id)
+        ttl = self._job_lock_ttl_seconds()
+        try:
+            return bool(self._client.set(key, worker_id, nx=True, ex=ttl))
+        except Exception:
+            return False
+
+    def _renew_job_lock(self, job_id: str, worker_id: str) -> None:
+        ttl = self._job_lock_ttl_seconds()
+        try:
+            self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                1,
+                self._job_lock_key(job_id),
+                worker_id,
+                str(int(ttl)),
+            )
+        except Exception:
+            return
+
+    def _release_job_lock(self, job_id: str, worker_id: str) -> None:
+        try:
+            self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                self._job_lock_key(job_id),
+                worker_id,
+            )
+        except Exception:
+            return
+
     def _worker_loop(self) -> None:
         next_requeue = 0.0
         while not self._stop_event.is_set():
@@ -782,6 +856,8 @@ class _RedisBackend:
             record["cancel_requested"] = True
             record["error"] = {"error": "CANCELED", "message": "Canceled"}
             self._save_job(job_id, record)
+            self._client.srem(self._global_queued_key(), job_id)
+            self._client.srem(self._global_running_key(), job_id)
             if owner:
                 self._client.srem(self._owner_queued_key(owner), job_id)
                 self._client.srem(self._owner_running_key(owner), job_id)
@@ -812,11 +888,13 @@ class _RedisBackend:
 
             self._save_job(job_id, record)
 
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.sadd(self._global_running_key(), job_id)
             if owner:
-                pipe = self._client.pipeline()
                 pipe.srem(self._owner_queued_key(owner), job_id)
                 pipe.sadd(self._owner_running_key(owner), job_id)
-                pipe.execute()
+            pipe.execute()
 
             cancel_event = threading.Event()
             last_slot_renew = 0.0
@@ -876,17 +954,237 @@ class _RedisBackend:
                 final["error"] = None
                 self._save_job(job_id, final)
 
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.srem(self._global_running_key(), job_id)
             if owner:
-                pipe = self._client.pipeline()
                 pipe.srem(self._owner_queued_key(owner), job_id)
                 pipe.srem(self._owner_running_key(owner), job_id)
-                pipe.execute()
+            pipe.execute()
 
             self._client.delete(self._cancel_key(job_id))
             self._cleanup_processing(job_id)
         finally:
             if slot_key:
                 self._release_global_slot(slot_key, job_id)
+
+    def process_job_direct(self, job_id: str, *, worker_id: str | None = None) -> bool:
+        """Process a queued job without using the Redis list-based queue.
+
+        Returns:
+        - True: job processed (or already terminal / missing)
+        - False: should retry later (e.g., concurrency/slot unavailable)
+        """
+
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return True
+
+        worker_id = str(worker_id or "").strip() or uuid.uuid4().hex
+        if not self._acquire_job_lock(job_id, worker_id):
+            return False
+
+        record = self._load_job(job_id)
+        if record is None:
+            self._release_job_lock(job_id, worker_id)
+            return True
+
+        status = str(record.get("status") or "")
+        owner = str(record.get("owner") or "")
+
+        if status == "running":
+            if self._stale_seconds <= 0:
+                self._release_job_lock(job_id, worker_id)
+                return True
+
+            attempts = int(record.get("attempts") or 0) + 1
+            record["attempts"] = attempts
+            record["updated_at"] = time.time()
+
+            if attempts >= self._max_attempts:
+                record["status"] = "failed"
+                record["finished_at"] = time.time()
+                record["error"] = {
+                    "error": "STALE_WORKER",
+                    "message": "Job was abandoned by a worker",
+                }
+                self._save_job(job_id, record)
+                pipe = self._client.pipeline()
+                pipe.srem(self._global_queued_key(), job_id)
+                pipe.srem(self._global_running_key(), job_id)
+                if owner:
+                    pipe.srem(self._owner_running_key(owner), job_id)
+                    pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.execute()
+                try:
+                    self._client.delete(self._cancel_key(job_id))
+                except Exception:
+                    pass
+                self._release_job_lock(job_id, worker_id)
+                return True
+
+            record["status"] = "queued"
+            record["started_at"] = None
+            record["progress_step"] = None
+            record["error"] = None
+            self._save_job(job_id, record)
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_running_key(), job_id)
+            pipe.sadd(self._global_queued_key(), job_id)
+            if owner:
+                pipe.srem(self._owner_running_key(owner), job_id)
+                pipe.sadd(self._owner_queued_key(owner), job_id)
+            pipe.execute()
+            status = "queued"
+
+        if status in {"succeeded", "failed", "canceled"}:
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.srem(self._global_running_key(), job_id)
+            if owner:
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.srem(self._owner_running_key(owner), job_id)
+            pipe.execute()
+            self._release_job_lock(job_id, worker_id)
+            return True
+
+        if status != "queued":
+            self._release_job_lock(job_id, worker_id)
+            return True
+
+        if self._is_cancel_requested(job_id):
+            record["status"] = "canceled"
+            record["finished_at"] = time.time()
+            record["updated_at"] = time.time()
+            record["cancel_requested"] = True
+            record["error"] = {"error": "CANCELED", "message": "Canceled"}
+            self._save_job(job_id, record)
+
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.srem(self._global_running_key(), job_id)
+            if owner:
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.srem(self._owner_running_key(owner), job_id)
+            pipe.execute()
+            try:
+                self._client.delete(self._cancel_key(job_id))
+            except Exception:
+                pass
+            self._release_job_lock(job_id, worker_id)
+            return True
+
+        if owner and self._max_concurrent_per_owner > 0:
+            try:
+                running_now = int(self._client.scard(self._owner_running_key(owner)) or 0)
+            except Exception:
+                running_now = 0
+            if running_now >= self._max_concurrent_per_owner:
+                self._release_job_lock(job_id, worker_id)
+                return False
+
+        slot_allowed, slot_key = self._acquire_global_slot(job_id)
+        if not slot_allowed:
+            self._release_job_lock(job_id, worker_id)
+            return False
+
+        try:
+            record["status"] = "running"
+            record["started_at"] = time.time()
+            record["updated_at"] = time.time()
+            record["progress_step"] = 0
+            record["progress_total"] = int(record.get("progress_total") or 0)
+
+            self._save_job(job_id, record)
+
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.sadd(self._global_running_key(), job_id)
+            if owner:
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.sadd(self._owner_running_key(owner), job_id)
+            pipe.execute()
+
+            cancel_event = threading.Event()
+            last_slot_renew = 0.0
+            last_lock_renew = 0.0
+
+            def _on_progress(step: int, total: int) -> None:
+                if self._is_cancel_requested(job_id):
+                    cancel_event.set()
+
+                record_update = self._load_job(job_id) or {}
+                if record_update.get("status") != "running":
+                    return
+                record_update["progress_step"] = int(step)
+                record_update["progress_total"] = int(total)
+                record_update["updated_at"] = time.time()
+                self._save_job(job_id, record_update)
+
+                nonlocal last_slot_renew
+                nonlocal last_lock_renew
+                now = time.time()
+                if slot_key and now - last_slot_renew >= 10.0:
+                    self._renew_global_slot(slot_key, job_id)
+                    last_slot_renew = now
+                if now - last_lock_renew >= 10.0:
+                    self._renew_job_lock(job_id, worker_id)
+                    last_lock_renew = now
+
+            try:
+                req_payload = record.get("request") or {}
+                req = GenerateRequest.model_validate(req_payload)
+                result = run_generate_sync(
+                    req,
+                    job_id,
+                    cancel_event=cancel_event,
+                    on_progress=_on_progress,
+                )
+            except GenerationCancelledError:
+                final = self._load_job(job_id) or record
+                final["status"] = "canceled"
+                final["finished_at"] = time.time()
+                final["updated_at"] = time.time()
+                final["cancel_requested"] = True
+                final["error"] = {"error": "CANCELED", "message": "Canceled"}
+                self._save_job(job_id, final)
+            except Exception as exc:
+                final = self._load_job(job_id) or record
+                final["status"] = "failed"
+                final["finished_at"] = time.time()
+                final["updated_at"] = time.time()
+                final["error"] = {"error": "GENERATION_FAILED", "message": str(exc)}
+                self._save_job(job_id, final)
+            else:
+                final = self._load_job(job_id) or record
+                final["status"] = "succeeded"
+                final["finished_at"] = time.time()
+                final["updated_at"] = time.time()
+                final["seed"] = int(result.get("seed", 0))
+                final["elapsed_ms"] = int(result.get("elapsed_ms", 0))
+                final["metadata"] = result.get("metadata") or {}
+                final["saved_paths"] = list(result.get("saved_paths") or [])
+                final["error"] = None
+                self._save_job(job_id, final)
+
+            pipe = self._client.pipeline()
+            pipe.srem(self._global_queued_key(), job_id)
+            pipe.srem(self._global_running_key(), job_id)
+            if owner:
+                pipe.srem(self._owner_queued_key(owner), job_id)
+                pipe.srem(self._owner_running_key(owner), job_id)
+            pipe.execute()
+
+            try:
+                self._client.delete(self._cancel_key(job_id))
+            except Exception:
+                pass
+        finally:
+            if slot_key:
+                self._release_global_slot(slot_key, job_id)
+            self._release_job_lock(job_id, worker_id)
+
+        return True
 
     def _requeue_stale(self) -> None:
         lock_key = f"{self._namespace}:reaper_lock"
@@ -929,6 +1227,8 @@ class _RedisBackend:
                         "message": "Job was abandoned by a worker",
                     }
                     self._save_job(job_id, record)
+                    self._client.srem(self._global_queued_key(), job_id)
+                    self._client.srem(self._global_running_key(), job_id)
                     if owner:
                         self._client.srem(self._owner_running_key(owner), job_id)
                         self._client.srem(self._owner_queued_key(owner), job_id)
@@ -944,6 +1244,8 @@ class _RedisBackend:
                 pipe = self._client.pipeline()
                 pipe.lrem(self._processing_key(), 0, job_id)
                 pipe.rpush(self._queue_key(), job_id)
+                pipe.srem(self._global_running_key(), job_id)
+                pipe.sadd(self._global_queued_key(), job_id)
                 if owner:
                     pipe.srem(self._owner_running_key(owner), job_id)
                     pipe.sadd(self._owner_queued_key(owner), job_id)
@@ -981,6 +1283,15 @@ class _RedisBackend:
 
     def _processing_key(self) -> str:
         return f"{self._namespace}:processing"
+
+    def _global_queued_key(self) -> str:
+        return f"{self._namespace}:queued"
+
+    def _global_running_key(self) -> str:
+        return f"{self._namespace}:running"
+
+    def _job_lock_key(self, job_id: str) -> str:
+        return f"{self._namespace}:job_lock:{job_id}"
 
     def _owner_queued_key(self, owner: str) -> str:
         return f"{self._namespace}:owner:{owner}:queued"
@@ -1025,6 +1336,7 @@ class T2IJobManager:
         *,
         redis_url: str | None = None,
         worker_enabled: bool = True,
+        dispatch_mode: str = "redis",
         job_ttl_seconds: int = 86400,
         stale_seconds: int = 600,
         max_attempts: int = 2,
@@ -1042,6 +1354,7 @@ class T2IJobManager:
                     max_attempts=max_attempts,
                     max_concurrent_per_owner=max_concurrent_per_owner,
                     max_global_concurrent=max_global_concurrent,
+                    dispatch_mode=dispatch_mode,
                     worker_enabled=worker_enabled,
                 )
                 if candidate.ping():
@@ -1086,3 +1399,9 @@ class T2IJobManager:
 
     def delete_job(self, job_id: str) -> bool:
         return self._backend.delete_job(job_id)
+
+    def process_job(self, job_id: str, *, worker_id: str | None = None) -> bool:
+        backend = self._backend
+        if isinstance(backend, _RedisBackend):
+            return backend.process_job_direct(job_id, worker_id=worker_id)
+        return False

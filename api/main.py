@@ -180,9 +180,13 @@ def create_app() -> FastAPI:
     try:
         from api.t2i_jobs import T2IJobManager
 
+        dispatch_mode = str(settings.api.t2i_dispatch_mode or "redis").lower()
+        worker_enabled = bool(settings.api.t2i_worker_enabled) and dispatch_mode != "celery"
+
         app.state.t2i_job_manager = T2IJobManager(
             redis_url=app.state.redis_url,
-            worker_enabled=bool(settings.api.t2i_worker_enabled),
+            worker_enabled=worker_enabled,
+            dispatch_mode=dispatch_mode,
             job_ttl_seconds=int(settings.api.t2i_job_ttl_seconds or 0),
             stale_seconds=int(settings.api.t2i_job_stale_seconds or 0),
             max_attempts=int(settings.api.t2i_job_max_attempts or 1),
