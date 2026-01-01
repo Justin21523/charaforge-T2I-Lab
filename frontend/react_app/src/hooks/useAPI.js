@@ -7,6 +7,26 @@ export const useAPI = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  const extractRequestId = useCallback((error) => {
+    if (!error) return "";
+    if (error.requestId) return String(error.requestId);
+    const msg = String(error.message || "");
+    const match = msg.match(/request_id=([A-Za-z0-9_-]+)/);
+    return match ? match[1] : "";
+  }, []);
+
+  const formatErrorToastMessage = useCallback(
+    (error, fallbackMessage) => {
+      const message = fallbackMessage || error?.message || "Unknown error";
+      const requestId = extractRequestId(error);
+      if (requestId && typeof message === "string" && !message.includes(`request_id=${requestId}`)) {
+        return `${message} (request_id=${requestId})`;
+      }
+      return message;
+    },
+    [extractRequestId]
+  );
+
   const checkHealth = useCallback(async () => {
     try {
       const health = await apiService.healthCheck();
@@ -42,14 +62,14 @@ export const useAPI = () => {
         return result;
       } catch (error) {
         if (showError) {
-          toast.error(options.errorMessage || error.message);
+          toast.error(formatErrorToastMessage(error, options.errorMessage));
         }
         throw error;
       } finally {
         if (showLoading) setIsLoading(false);
       }
     },
-    []
+    [formatErrorToastMessage]
   );
 
   useEffect(() => {

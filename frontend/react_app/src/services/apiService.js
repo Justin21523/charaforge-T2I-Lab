@@ -73,6 +73,13 @@ class APIService {
         const requestId =
           data?.request_id || error.response?.headers?.["x-request-id"] || "";
 
+        const status = error.response?.status || 0;
+        const code = typeof data?.error === "string" ? data.error : "";
+        const details =
+          data && typeof data === "object" && data.details && typeof data.details === "object"
+            ? data.details
+            : {};
+
         const message =
           (typeof data?.message === "string" && data.message) ||
           (typeof data?.detail === "string" && data.detail) ||
@@ -80,7 +87,12 @@ class APIService {
           "Unknown error";
 
         const withRequestId = requestId ? `${message} (request_id=${requestId})` : message;
-        return Promise.reject(new Error(withRequestId));
+        const apiError = new Error(withRequestId);
+        apiError.requestId = requestId;
+        apiError.status = status;
+        apiError.code = code;
+        apiError.details = details;
+        return Promise.reject(apiError);
       }
     );
   }
