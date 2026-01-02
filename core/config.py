@@ -216,7 +216,9 @@ class APIConfig(BaseSettings):
     workers: int = Field(default=1, ge=1, le=16)
 
     # CORS and security
-    cors_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000")
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+    )
     api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("KEY", "API_KEY"))
     api_keys: str = Field(default="", validation_alias=AliasChoices("KEYS", "API_KEYS"))
     api_admin_keys: str = Field(default="", validation_alias=AliasChoices("ADMIN_KEYS", "API_ADMIN_KEYS"))
@@ -230,6 +232,31 @@ class APIConfig(BaseSettings):
         default=2592000,
         ge=0,
         validation_alias=AliasChoices("JWT_REFRESH_TTL_SECONDS", "API_JWT_REFRESH_TTL_SECONDS"),
+    )
+    jwt_refresh_cookie_name: str = Field(
+        default="cfr_refresh",
+        validation_alias=AliasChoices("JWT_REFRESH_COOKIE_NAME", "API_JWT_REFRESH_COOKIE_NAME"),
+    )
+    jwt_csrf_cookie_name: str = Field(
+        default="cfr_csrf",
+        validation_alias=AliasChoices("JWT_CSRF_COOKIE_NAME", "API_JWT_CSRF_COOKIE_NAME"),
+    )
+    jwt_cookie_path: str = Field(
+        default="/api/v1/auth",
+        validation_alias=AliasChoices("JWT_COOKIE_PATH", "API_JWT_COOKIE_PATH"),
+    )
+    jwt_cookie_domain: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("JWT_COOKIE_DOMAIN", "API_JWT_COOKIE_DOMAIN"),
+    )
+    jwt_cookie_samesite: str = Field(
+        default="lax",
+        pattern="^(lax|strict|none)$",
+        validation_alias=AliasChoices("JWT_COOKIE_SAMESITE", "API_JWT_COOKIE_SAMESITE"),
+    )
+    jwt_cookie_secure: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("JWT_COOKIE_SECURE", "API_JWT_COOKIE_SECURE"),
     )
     rate_limit: int = Field(default=100, ge=0)  # requests per minute (0 disables)
     scan_rate_limit: int = Field(

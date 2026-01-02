@@ -9,10 +9,12 @@ const STORAGE_API_KEY_HEADER = "charaforge.apiKeyHeader";
 const STORAGE_USE_JWT = "charaforge.auth.useJwt";
 const STORAGE_JWT_ACCESS_TOKEN = "charaforge.jwt.accessToken";
 const STORAGE_JWT_EXPIRES_AT = "charaforge.jwt.expiresAt";
-const STORAGE_JWT_REFRESH_TOKEN = "charaforge.jwt.refreshToken";
 const STORAGE_JWT_REFRESH_EXPIRES_AT = "charaforge.jwt.refreshExpiresAt";
 const STORAGE_JWT_ROLE = "charaforge.jwt.role";
 const STORAGE_JWT_SCOPES = "charaforge.jwt.scopes";
+const LEGACY_STORAGE_JWT_REFRESH_TOKEN = "charaforge.jwt.refreshToken";
+const CSRF_COOKIE_NAME = import.meta.env.VITE_JWT_CSRF_COOKIE_NAME || "cfr_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
 
 const readStoredJson = (key, fallback) => {
   try {
@@ -45,11 +47,11 @@ class APIService {
     this.useJwt = Boolean(readStoredJson(STORAGE_USE_JWT, false));
     this.accessToken = readStoredJson(STORAGE_JWT_ACCESS_TOKEN, "") || "";
     this.accessExpiresAt = Number(readStoredJson(STORAGE_JWT_EXPIRES_AT, 0) || 0);
-    this.refreshToken = readStoredJson(STORAGE_JWT_REFRESH_TOKEN, "") || "";
     this.refreshExpiresAt = Number(readStoredJson(STORAGE_JWT_REFRESH_EXPIRES_AT, 0) || 0);
     this.jwtRole = readStoredJson(STORAGE_JWT_ROLE, "") || "";
     this.jwtScopes = readStoredJson(STORAGE_JWT_SCOPES, []) || [];
     this._refreshPromise = null;
+    writeStoredJson(LEGACY_STORAGE_JWT_REFRESH_TOKEN, null);
 
     const defaultHeaders = { "Content-Type": "application/json" };
     this.client = axios.create({
@@ -61,6 +63,7 @@ class APIService {
       baseURL: API_BASE_URL,
       timeout: 30000,
       headers: defaultHeaders,
+      withCredentials: true,
     });
 
     // Request interceptor
@@ -135,7 +138,7 @@ class APIService {
           originalConfig &&
           !originalConfig._jwtRetry &&
           this.useJwt &&
-          this.refreshToken
+          this.accessToken
         ) {
           originalConfig._jwtRetry = true;
           try {
@@ -191,7 +194,7 @@ class APIService {
   }
 
   hasJwtSession() {
-    return Boolean(this.accessToken && this.refreshToken);
+    return Boolean(this.accessToken);
   }
 
   getJwtInfo() {
@@ -199,11 +202,31 @@ class APIService {
       enabled: Boolean(this.useJwt),
       accessToken: this.accessToken || "",
       expiresAt: Number(this.accessExpiresAt || 0),
-      refreshToken: this.refreshToken || "",
       refreshExpiresAt: Number(this.refreshExpiresAt || 0),
       role: this.jwtRole || "",
       scopes: Array.isArray(this.jwtScopes) ? this.jwtScopes : [],
     };
+  }
+
+  _readCookie(name) {
+    try {
+      if (typeof document === "undefined") return "";
+      const needle = `${name}=`;
+      const parts = String(document.cookie || "")
+        .split(";")
+        .map((chunk) => chunk.trim());
+      for (const part of parts) {
+        if (!part.startsWith(needle)) continue;
+        return decodeURIComponent(part.slice(needle.length));
+      }
+      return "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  _getCsrfToken() {
+    return this._readCookie(CSRF_COOKIE_NAME) || "";
   }
 
   getAuthHeaders() {
@@ -244,21 +267,18 @@ class APIService {
   _setJwtSession(payload) {
     const accessToken = payload?.access_token || "";
     const expiresAt = Number(payload?.expires_at || 0);
-    const refreshToken = payload?.refresh_token || "";
     const refreshExpiresAt = Number(payload?.refresh_expires_at || 0);
     const role = payload?.role || "";
     const scopes = Array.isArray(payload?.scopes) ? payload.scopes : [];
 
     this.accessToken = accessToken;
     this.accessExpiresAt = expiresAt;
-    this.refreshToken = refreshToken;
     this.refreshExpiresAt = refreshExpiresAt;
     this.jwtRole = role;
     this.jwtScopes = scopes;
 
     writeStoredJson(STORAGE_JWT_ACCESS_TOKEN, accessToken);
     writeStoredJson(STORAGE_JWT_EXPIRES_AT, expiresAt);
-    writeStoredJson(STORAGE_JWT_REFRESH_TOKEN, refreshToken);
     writeStoredJson(STORAGE_JWT_REFRESH_EXPIRES_AT, refreshExpiresAt);
     writeStoredJson(STORAGE_JWT_ROLE, role);
     writeStoredJson(STORAGE_JWT_SCOPES, scopes);
@@ -267,16 +287,15 @@ class APIService {
   clearJwtSession() {
     this.accessToken = "";
     this.accessExpiresAt = 0;
-    this.refreshToken = "";
     this.refreshExpiresAt = 0;
     this.jwtRole = "";
     this.jwtScopes = [];
     writeStoredJson(STORAGE_JWT_ACCESS_TOKEN, "");
     writeStoredJson(STORAGE_JWT_EXPIRES_AT, 0);
-    writeStoredJson(STORAGE_JWT_REFRESH_TOKEN, "");
     writeStoredJson(STORAGE_JWT_REFRESH_EXPIRES_AT, 0);
     writeStoredJson(STORAGE_JWT_ROLE, "");
     writeStoredJson(STORAGE_JWT_SCOPES, []);
+    writeStoredJson(LEGACY_STORAGE_JWT_REFRESH_TOKEN, null);
   }
 
   async exchangeApiKeyForToken() {
@@ -302,17 +321,14 @@ class APIService {
   }
 
   async refreshJwtSession() {
-    if (!this.refreshToken) {
-      throw new Error("Missing refresh token");
-    }
     if (this._refreshPromise) {
       return await this._refreshPromise;
     }
 
     this._refreshPromise = (async () => {
-      const res = await this.authClient.post("/api/v1/auth/refresh", {
-        refresh_token: this.refreshToken,
-      });
+      const csrf = this._getCsrfToken();
+      const headers = csrf ? { [CSRF_HEADER_NAME]: csrf } : {};
+      const res = await this.authClient.post("/api/v1/auth/refresh", null, { headers });
       this._setJwtSession(res.data);
       return res.data;
     })();
@@ -325,16 +341,13 @@ class APIService {
   }
 
   async logoutJwt({ all = false } = {}) {
-    const refreshToken = this.refreshToken;
     this.clearJwtSession();
-    if (!refreshToken) {
-      return { status: "ok", revoked: true, count: 0 };
-    }
     try {
+      const csrf = this._getCsrfToken();
+      const headers = csrf ? { [CSRF_HEADER_NAME]: csrf } : {};
       const res = await this.authClient.post("/api/v1/auth/logout", {
-        refresh_token: refreshToken,
         all: Boolean(all),
-      });
+      }, { headers });
       return res.data;
     } catch (error) {
       return { status: "error", message: error.message };

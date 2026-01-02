@@ -7,9 +7,10 @@ Supports:
 
 from __future__ import annotations
 
+import secrets
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from api.jwt_tokens import make_access_token
@@ -18,6 +19,91 @@ from api.refresh_store import RefreshTokenStore
 from core.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+CSRF_HEADER_NAME = "X-CSRF-Token"
+
+
+def _cookie_kwargs(request: Request) -> Dict[str, Any]:
+    settings = get_settings()
+    secure = bool(settings.api.jwt_cookie_secure) or request.url.scheme == "https"
+    samesite = str(settings.api.jwt_cookie_samesite or "lax").lower()
+    if samesite not in {"lax", "strict", "none"}:
+        samesite = "lax"
+    return {
+        "path": str(settings.api.jwt_cookie_path or "/api/v1/auth"),
+        "domain": str(settings.api.jwt_cookie_domain) if settings.api.jwt_cookie_domain else None,
+        "secure": secure,
+        "samesite": samesite,
+    }
+
+
+def _set_refresh_cookie(
+    request: Request,
+    response: Response,
+    *,
+    refresh_token: str,
+    refresh_ttl_seconds: int,
+    csrf_token: str,
+) -> None:
+    settings = get_settings()
+    kwargs = _cookie_kwargs(request)
+    response.set_cookie(
+        key=str(settings.api.jwt_refresh_cookie_name),
+        value=str(refresh_token),
+        max_age=int(refresh_ttl_seconds),
+        httponly=True,
+        **kwargs,
+    )
+    response.set_cookie(
+        key=str(settings.api.jwt_csrf_cookie_name),
+        value=str(csrf_token),
+        max_age=int(refresh_ttl_seconds),
+        httponly=False,
+        **kwargs,
+    )
+
+
+def _clear_refresh_cookie(request: Request, response: Response) -> None:
+    settings = get_settings()
+    kwargs = _cookie_kwargs(request)
+    response.delete_cookie(
+        key=str(settings.api.jwt_refresh_cookie_name),
+        path=kwargs.get("path"),
+        domain=kwargs.get("domain"),
+    )
+    response.delete_cookie(
+        key=str(settings.api.jwt_csrf_cookie_name),
+        path=kwargs.get("path"),
+        domain=kwargs.get("domain"),
+    )
+
+
+def _require_csrf(request: Request) -> None:
+    settings = get_settings()
+    expected = str(request.cookies.get(str(settings.api.jwt_csrf_cookie_name)) or "")
+    provided = str(request.headers.get(CSRF_HEADER_NAME) or "")
+    if not expected or not provided:
+        raise HTTPException(status_code=403, detail={"error": "CSRF_FAILED", "message": "Forbidden"})
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail={"error": "CSRF_FAILED", "message": "Forbidden"})
+
+
+def _resolve_refresh_token(request: Request, payload: "RefreshRequest | LogoutRequest | None") -> tuple[str, str]:
+    token = str(getattr(payload, "refresh_token", "") or "").strip()
+    if token:
+        return token, "body"
+    settings = get_settings()
+    token = str(request.cookies.get(str(settings.api.jwt_refresh_cookie_name)) or "").strip()
+    if token:
+        return token, "cookie"
+    return "", ""
+
+
+def _normalize_refresh_ttl_seconds(ttl_seconds: int) -> int:
+    ttl_seconds = int(ttl_seconds or 0)
+    if ttl_seconds <= 0:
+        ttl_seconds = 30 * 24 * 3600
+    return ttl_seconds
 
 
 def _require_admin(request: Request) -> None:
@@ -89,18 +175,17 @@ class TokenResponse(BaseModel):
     token_type: str = Field(default="bearer")
     access_token: str
     expires_at: int
-    refresh_token: str
     refresh_expires_at: int
     role: str
     scopes: List[str] = Field(default_factory=list)
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str
+    refresh_token: Optional[str] = None
     all: bool = Field(default=False)
 
 
@@ -116,7 +201,7 @@ async def me(request: Request) -> Dict[str, Any]:
 
 
 @router.post("/token", response_model=TokenResponse)
-async def issue_token(request: Request) -> TokenResponse:
+async def issue_token(request: Request, response: Response) -> TokenResponse:
     """Exchange an API key for JWT access + refresh tokens.
 
     For security, this endpoint requires API key auth (not an existing JWT).
@@ -149,11 +234,19 @@ async def issue_token(request: Request) -> TokenResponse:
         key_id=str(key_id) if key_id else None,
         ttl_seconds=int(settings.api.jwt_refresh_ttl_seconds or 0),
     )
+    csrf_token = secrets.token_urlsafe(32)
+    refresh_ttl_seconds = _normalize_refresh_ttl_seconds(int(settings.api.jwt_refresh_ttl_seconds or 0))
+    _set_refresh_cookie(
+        request,
+        response,
+        refresh_token=refresh_token,
+        refresh_ttl_seconds=refresh_ttl_seconds,
+        csrf_token=csrf_token,
+    )
 
     return TokenResponse(
         access_token=access_token,
         expires_at=expires_at,
-        refresh_token=refresh_token,
         refresh_expires_at=refresh_expires_at,
         role=role,
         scopes=sorted(scopes),
@@ -161,11 +254,18 @@ async def issue_token(request: Request) -> TokenResponse:
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(request: Request, payload: RefreshRequest) -> TokenResponse:
+async def refresh_token(
+    request: Request,
+    response: Response,
+    payload: RefreshRequest | None = None,
+) -> TokenResponse:
     """Rotate refresh token and mint a new access token."""
 
     refresh_store = _refresh_store(request)
-    record = refresh_store.verify(payload.refresh_token)
+    raw_refresh, source = _resolve_refresh_token(request, payload)
+    if source == "cookie":
+        _require_csrf(request)
+    record = refresh_store.verify(raw_refresh)
     if not record:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -200,12 +300,20 @@ async def refresh_token(request: Request, payload: RefreshRequest) -> TokenRespo
         key_id=str(key_id) if key_id else None,
         ttl_seconds=int(settings.api.jwt_refresh_ttl_seconds or 0),
     )
-    refresh_store.revoke(payload.refresh_token)
+    refresh_store.revoke(raw_refresh)
+    csrf_token = secrets.token_urlsafe(32)
+    refresh_ttl_seconds = _normalize_refresh_ttl_seconds(int(settings.api.jwt_refresh_ttl_seconds or 0))
+    _set_refresh_cookie(
+        request,
+        response,
+        refresh_token=new_refresh_token,
+        refresh_ttl_seconds=refresh_ttl_seconds,
+        csrf_token=csrf_token,
+    )
 
     return TokenResponse(
         access_token=access_token,
         expires_at=expires_at,
-        refresh_token=new_refresh_token,
         refresh_expires_at=refresh_expires_at,
         role=role,
         scopes=sorted(scopes),
@@ -213,16 +321,25 @@ async def refresh_token(request: Request, payload: RefreshRequest) -> TokenRespo
 
 
 @router.post("/logout")
-async def logout(request: Request, payload: LogoutRequest) -> Dict[str, Any]:
+async def logout(
+    request: Request,
+    response: Response,
+    payload: LogoutRequest | None = None,
+) -> Dict[str, Any]:
     refresh_store = _refresh_store(request)
+    raw_refresh, source = _resolve_refresh_token(request, payload)
+    if source == "cookie":
+        _require_csrf(request)
     deleted = 0
-    if payload.all:
-        record = refresh_store.verify(payload.refresh_token)
+    all_sessions = bool(getattr(payload, "all", False))
+    if all_sessions:
+        record = refresh_store.verify(raw_refresh)
         if record:
             deleted = refresh_store.revoke_subject(str(record.get("subject") or ""))
     else:
-        ok = refresh_store.revoke(payload.refresh_token)
+        ok = refresh_store.revoke(raw_refresh)
         deleted = 1 if ok else 0
+    _clear_refresh_cookie(request, response)
     return {"status": "ok", "revoked": True, "count": deleted}
 
 

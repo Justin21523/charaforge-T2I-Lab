@@ -63,7 +63,7 @@ const Header = () => {
   };
 
   const jwtInfo = apiService.getJwtInfo();
-  const jwtLoggedIn = Boolean(jwtInfo?.accessToken && jwtInfo?.refreshToken);
+  const jwtLoggedIn = Boolean(jwtInfo?.accessToken);
 
   return (
     <header className="header">

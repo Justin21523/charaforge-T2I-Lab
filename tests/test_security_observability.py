@@ -332,25 +332,27 @@ async def test_jwt_token_exchange_refresh_and_bearer_auth(make_app):
         assert issued.status_code == 200
         payload = issued.json()
         assert payload.get("access_token")
-        assert payload.get("refresh_token")
+        refresh_cookie = client.cookies.get("cfr_refresh")
+        csrf_cookie = client.cookies.get("cfr_csrf")
+        assert isinstance(refresh_cookie, str) and refresh_cookie
+        assert isinstance(csrf_cookie, str) and csrf_cookie
 
         bearer = {"Authorization": f"Bearer {payload['access_token']}"}
         res = await client.get("/api/v1/datasets/root", headers=bearer)
         assert res.status_code == 200
 
         # The refresh endpoint is usable without an API key.
-        refreshed = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": payload["refresh_token"]}
-        )
+        refreshed = await client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": csrf_cookie})
         assert refreshed.status_code == 200
         refreshed_payload = refreshed.json()
         assert refreshed_payload.get("access_token")
-        assert refreshed_payload.get("refresh_token")
-        assert refreshed_payload["refresh_token"] != payload["refresh_token"]
+        rotated_cookie = client.cookies.get("cfr_refresh")
+        assert isinstance(rotated_cookie, str) and rotated_cookie
+        assert rotated_cookie != refresh_cookie
 
         # Old refresh token is invalid after rotation.
         reused = await client.post(
-            "/api/v1/auth/refresh", json={"refresh_token": payload["refresh_token"]}
+            "/api/v1/auth/refresh", json={"refresh_token": refresh_cookie}
         )
         assert reused.status_code == 401
         _assert_error_schema(reused)
@@ -386,7 +388,8 @@ async def test_revoking_key_revokes_refresh_tokens(make_app):
 
         issued = await client.post("/api/v1/auth/token", headers={"X-API-Key": raw_key})
         assert issued.status_code == 200
-        refresh_token = issued.json()["refresh_token"]
+        refresh_token = client.cookies.get("cfr_refresh")
+        assert isinstance(refresh_token, str) and refresh_token
 
         revoked = await client.post(
             f"/api/v1/auth/keys/{key_id}/revoke", headers={"X-API-Key": "admin_key"}
