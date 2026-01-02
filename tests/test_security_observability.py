@@ -364,6 +364,45 @@ async def test_jwt_token_exchange_refresh_and_bearer_auth(make_app):
 
 
 @pytest.mark.anyio
+async def test_refresh_replay_revokes_subject_sessions(make_app):
+    app = make_app(
+        API_KEYS="user_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_JWT_ACCESS_TTL_SECONDS="60",
+        API_JWT_REFRESH_TTL_SECONDS="3600",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        issued = await client.post("/api/v1/auth/token", headers={"X-API-Key": "user_key"})
+        assert issued.status_code == 200
+        old_refresh = client.cookies.get("cfr_refresh")
+        old_csrf = client.cookies.get("cfr_csrf")
+        assert isinstance(old_refresh, str) and old_refresh
+        assert isinstance(old_csrf, str) and old_csrf
+
+        rotated = await client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": old_csrf})
+        assert rotated.status_code == 200
+        new_refresh = client.cookies.get("cfr_refresh")
+        new_csrf = client.cookies.get("cfr_csrf")
+        assert isinstance(new_refresh, str) and new_refresh
+        assert new_refresh != old_refresh
+        assert isinstance(new_csrf, str) and new_csrf
+
+        replay = await client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh})
+        assert replay.status_code == 401
+        _assert_error_schema(replay)
+        assert replay.json().get("error") == "REFRESH_REPLAY_DETECTED"
+
+        # The active session is revoked after replay detection.
+        after = await client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": new_csrf})
+        assert after.status_code == 401
+        _assert_error_schema(after)
+
+
+@pytest.mark.anyio
 async def test_revoking_key_revokes_refresh_tokens(make_app):
     app = make_app(
         API_ADMIN_KEYS="admin_key",

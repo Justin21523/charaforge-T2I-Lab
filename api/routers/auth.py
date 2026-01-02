@@ -267,6 +267,23 @@ async def refresh_token(
         _require_csrf(request)
     record = refresh_store.verify(raw_refresh)
     if not record:
+        peeked = refresh_store.peek(raw_refresh)
+        if peeked and str(peeked.get("revoked_reason") or "") == "rotated":
+            subject = str(peeked.get("subject") or "")
+            key_id = str(peeked.get("key_id") or "") if peeked.get("key_id") else ""
+            revoked_subject = refresh_store.revoke_subject(subject) if subject else 0
+            revoked_key = refresh_store.revoke_key_id(key_id) if key_id else 0
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "REFRESH_REPLAY_DETECTED",
+                    "message": "Unauthorized",
+                    "details": {
+                        "revoked_subject_sessions": revoked_subject,
+                        "revoked_key_sessions": revoked_key,
+                    },
+                },
+            )
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     subject = str(record.get("subject") or "")
@@ -300,7 +317,8 @@ async def refresh_token(
         key_id=str(key_id) if key_id else None,
         ttl_seconds=int(settings.api.jwt_refresh_ttl_seconds or 0),
     )
-    refresh_store.revoke(raw_refresh)
+    replay_window = int(settings.api.jwt_refresh_replay_window_seconds or 0)
+    refresh_store.revoke(raw_refresh, reason="rotated", keep_seconds=replay_window)
     csrf_token = secrets.token_urlsafe(32)
     refresh_ttl_seconds = _normalize_refresh_ttl_seconds(int(settings.api.jwt_refresh_ttl_seconds or 0))
     _set_refresh_cookie(

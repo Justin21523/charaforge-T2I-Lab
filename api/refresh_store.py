@@ -115,6 +115,8 @@ class RefreshTokenStore:
             "created_at": _utc_now_iso(),
             "last_used_at": None,
             "revoked_at": None,
+            "revoked_reason": None,
+            "revoked_keep_until": None,
             "expires_at": expires_at,
         }
 
@@ -183,38 +185,93 @@ class RefreshTokenStore:
 
         return self._verify_file(token_hash=token_hash, now=current)
 
-    def revoke(self, raw_token: str) -> bool:
+    def peek(self, raw_token: str, *, now: Optional[float] = None) -> Optional[Dict[str, Any]]:
         raw_token = str(raw_token or "").strip()
-        if not raw_token:
-            return False
+        if not raw_token or "." not in raw_token:
+            return None
         token_hash = _token_hash(raw_token)
+        current = float(now if now is not None else time.time())
 
         client = self._redis()
         if client is not None:
             try:
                 raw = client.get(self._redis_key(token_hash))
-                if raw:
+                if not raw:
+                    return None
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    return None
+                exp = data.get("expires_at")
+                if exp is None:
+                    return None
+                if current > float(exp):
+                    return None
+                return data
+            except Exception:
+                logger.debug("Refresh token Redis peek failed; falling back to file")
+
+        return self._peek_file(token_hash=token_hash, now=current)
+
+    def revoke(self, raw_token: str, *, reason: str = "revoked", keep_seconds: int = 0) -> bool:
+        raw_token = str(raw_token or "").strip()
+        if not raw_token:
+            return False
+        token_hash = _token_hash(raw_token)
+        keep_seconds = int(keep_seconds or 0)
+        if keep_seconds < 0:
+            keep_seconds = 0
+        reason = str(reason or "revoked").strip() or "revoked"
+
+        client = self._redis()
+        if client is not None:
+            try:
+                key = self._redis_key(token_hash)
+                raw = client.get(key)
+                if not raw:
+                    client.delete(key)
+                    return False
+
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = None
+
+                if not isinstance(data, dict):
+                    client.delete(key)
+                    return False
+
+                subject = str(data.get("subject") or "")
+                key_id = str(data.get("key_id") or "")
+
+                ttl = 0
+                if keep_seconds > 0:
+                    ttl = keep_seconds
                     try:
-                        data = json.loads(raw)
-                        subject = str(data.get("subject") or "")
-                        key_id = str(data.get("key_id") or "")
+                        exp = float(data.get("expires_at") or 0.0)
                     except Exception:
-                        subject = ""
-                        key_id = ""
-                    pipe = client.pipeline()
-                    pipe.delete(self._redis_key(token_hash))
-                    if subject:
-                        pipe.srem(self._redis_subject_key(subject), token_hash)
-                    if key_id:
-                        pipe.srem(self._redis_key_id_key(key_id), token_hash)
-                    pipe.execute()
+                        exp = 0.0
+                    if exp:
+                        ttl = min(ttl, max(0, int(exp - time.time())))
+
+                pipe = client.pipeline()
+                if ttl > 0:
+                    now = time.time()
+                    data["revoked_at"] = _utc_now_iso()
+                    data["revoked_reason"] = reason
+                    data["revoked_keep_until"] = float(now + ttl)
+                    pipe.set(key, json.dumps(data, ensure_ascii=False), ex=max(1, ttl))
                 else:
-                    client.delete(self._redis_key(token_hash))
+                    pipe.delete(key)
+                if subject:
+                    pipe.srem(self._redis_subject_key(subject), token_hash)
+                if key_id:
+                    pipe.srem(self._redis_key_id_key(key_id), token_hash)
+                pipe.execute()
                 return True
             except Exception:
                 logger.debug("Refresh token Redis revoke failed; falling back to file")
 
-        return self._revoke_file(token_hash=token_hash)
+        return self._revoke_file(token_hash=token_hash, reason=reason, keep_seconds=keep_seconds)
 
     def revoke_subject(self, subject: str) -> int:
         subject = str(subject or "").strip()
@@ -355,8 +412,17 @@ class RefreshTokenStore:
                 continue
             if exp and now > exp:
                 continue
-            if record.get("revoked_at"):
-                continue
+            revoked_at = record.get("revoked_at")
+            if revoked_at:
+                keep_until = record.get("revoked_keep_until")
+                if keep_until is None:
+                    continue
+                try:
+                    keep_until_ts = float(keep_until)
+                except Exception:
+                    continue
+                if now > keep_until_ts:
+                    continue
             out[token_hash] = record
         return out
 
@@ -376,18 +442,43 @@ class RefreshTokenStore:
             if not record:
                 self._save_file_unlocked(records)
                 return None
+            if record.get("revoked_at"):
+                self._save_file_unlocked(records)
+                return None
             record["last_used_at"] = _utc_now_iso()
             records[token_hash] = record
             self._save_file_unlocked(records)
             return dict(record)
 
-    def _revoke_file(self, *, token_hash: str) -> bool:
+    def _peek_file(self, *, token_hash: str, now: float) -> Optional[Dict[str, Any]]:
+        with self._file_lock():
+            records = self._load_file_unlocked()
+            records = self._prune_expired(records, now=now)
+            record = records.get(token_hash)
+            self._save_file_unlocked(records)
+            return dict(record) if record else None
+
+    def _revoke_file(self, *, token_hash: str, reason: str, keep_seconds: int) -> bool:
         with self._file_lock():
             now = time.time()
             records = self._load_file_unlocked()
             records = self._prune_expired(records, now=now)
             if token_hash in records:
-                records.pop(token_hash, None)
+                if keep_seconds > 0:
+                    record = records.get(token_hash) or {}
+                    record["revoked_at"] = _utc_now_iso()
+                    record["revoked_reason"] = str(reason or "revoked")
+                    try:
+                        exp = float(record.get("expires_at") or 0.0)
+                    except Exception:
+                        exp = 0.0
+                    keep_until = float(now + float(keep_seconds))
+                    if exp:
+                        keep_until = min(keep_until, float(exp))
+                    record["revoked_keep_until"] = keep_until
+                    records[token_hash] = record
+                else:
+                    records.pop(token_hash, None)
                 self._save_file_unlocked(records)
                 return True
             self._save_file_unlocked(records)

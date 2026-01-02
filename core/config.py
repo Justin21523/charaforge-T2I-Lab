@@ -233,6 +233,13 @@ class APIConfig(BaseSettings):
         ge=0,
         validation_alias=AliasChoices("JWT_REFRESH_TTL_SECONDS", "API_JWT_REFRESH_TTL_SECONDS"),
     )
+    jwt_refresh_replay_window_seconds: int = Field(
+        default=86400,
+        ge=0,
+        validation_alias=AliasChoices(
+            "JWT_REFRESH_REPLAY_WINDOW_SECONDS", "API_JWT_REFRESH_REPLAY_WINDOW_SECONDS"
+        ),
+    )
     jwt_refresh_cookie_name: str = Field(
         default="cfr_refresh",
         validation_alias=AliasChoices("JWT_REFRESH_COOKIE_NAME", "API_JWT_REFRESH_COOKIE_NAME"),
