@@ -33,6 +33,13 @@ def _redis_url() -> str:
     )
 
 
+def _parse_ws_protocols(value: str | None) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
 @router.websocket("/train/{job_id}")
 async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     settings = get_settings()
@@ -53,7 +60,16 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     if auth_enabled:
         required_scope = "train:manage"
 
-        access_token = websocket.query_params.get("access_token")
+        protocols = _parse_ws_protocols(websocket.headers.get("sec-websocket-protocol"))
+        proto_access_token = ""
+        proto_api_key = ""
+        for proto in protocols:
+            if proto.startswith("access_token."):
+                proto_access_token = proto.split(".", 1)[1]
+            elif proto.startswith("api_key."):
+                proto_api_key = proto.split(".", 1)[1]
+
+        access_token = proto_access_token or websocket.query_params.get("access_token")
         if access_token:
             payload = verify_access_token(access_token)
             if not payload:
@@ -79,6 +95,7 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
             header_name = settings.api.key_header or "X-API-Key"
             presented = (
                 websocket.headers.get(header_name)
+                or proto_api_key
                 or websocket.query_params.get("api_key")
                 or websocket.query_params.get("token")
             )

@@ -27,25 +27,32 @@ const toWsUrl = (httpBaseUrl, path) => {
 };
 
 export const buildTrainProgressWsUrl = (apiBaseUrl, jobId) =>
-  (() => {
-    const url = new URL(toWsUrl(apiBaseUrl, `/api/v1/ws/train/${jobId}`));
-    const apiKey = readStoredJson(STORAGE_API_KEY, "") || "";
-    const useJwt = Boolean(readStoredJson(STORAGE_USE_JWT, false));
-    const accessToken = readStoredJson(STORAGE_JWT_ACCESS_TOKEN, "") || "";
-    const expiresAt = Number(readStoredJson(STORAGE_JWT_EXPIRES_AT, 0) || 0);
-    const now = Math.floor(Date.now() / 1000);
+  toWsUrl(apiBaseUrl, `/api/v1/ws/train/${jobId}`);
 
-    if (useJwt && accessToken && expiresAt > now + 10) {
-      url.searchParams.set("access_token", accessToken);
-    } else if (apiKey) {
-      url.searchParams.set("api_key", apiKey);
-    }
-    return url.toString();
-  })();
+export const buildTrainProgressWsProtocols = () => {
+  const apiKey = readStoredJson(STORAGE_API_KEY, "") || "";
+  const useJwt = Boolean(readStoredJson(STORAGE_USE_JWT, false));
+  const accessToken = readStoredJson(STORAGE_JWT_ACCESS_TOKEN, "") || "";
+  const expiresAt = Number(readStoredJson(STORAGE_JWT_EXPIRES_AT, 0) || 0);
+  const now = Math.floor(Date.now() / 1000);
+
+  const protocols = ["charaforge"];
+  if (useJwt && accessToken && expiresAt > now + 10) {
+    protocols.push(`access_token.${accessToken}`);
+  } else if (apiKey) {
+    protocols.push(`api_key.${apiKey}`);
+  }
+  return protocols;
+};
 
 export const useWebSocket = (
   url,
-  { enabled = true, reconnect = true, reconnectDelayMs = DEFAULT_RECONNECT_DELAY_MS } = {}
+  {
+    enabled = true,
+    reconnect = true,
+    reconnectDelayMs = DEFAULT_RECONNECT_DELAY_MS,
+    protocols = null,
+  } = {}
 ) => {
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
@@ -85,7 +92,9 @@ export const useWebSocket = (
       disconnect();
       setStatus("connecting");
 
-      const ws = new WebSocket(url);
+      const selectedProtocols =
+        typeof protocols === "function" ? protocols() : protocols;
+      const ws = selectedProtocols ? new WebSocket(url, selectedProtocols) : new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {

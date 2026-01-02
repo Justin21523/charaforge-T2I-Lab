@@ -245,10 +245,14 @@ def create_app() -> FastAPI:
                 body = metrics.render_prometheus()
                 try:
                     manager = getattr(request.app.state, "t2i_job_manager", None)
+                    queued = 0
+                    running = 0
                     if manager is not None and hasattr(manager, "global_counts"):
                         counts = manager.global_counts()
                         queued = int(counts.get("queued", 0))
                         running = int(counts.get("running", 0))
+                        active = queued + running
+                        max_queue = int(settings.api.t2i_max_global_queue or 0)
                         body += (
                             "# HELP charaforge_t2i_jobs_queued Queued T2I jobs.\n"
                             "# TYPE charaforge_t2i_jobs_queued gauge\n"
@@ -256,11 +260,20 @@ def create_app() -> FastAPI:
                             "# HELP charaforge_t2i_jobs_running Running T2I jobs.\n"
                             "# TYPE charaforge_t2i_jobs_running gauge\n"
                             f"charaforge_t2i_jobs_running {running}\n"
+                            "# HELP charaforge_t2i_jobs_active Active (queued+running) T2I jobs.\n"
+                            "# TYPE charaforge_t2i_jobs_active gauge\n"
+                            f"charaforge_t2i_jobs_active {active}\n"
+                            "# HELP charaforge_t2i_jobs_queue_max Max allowed active T2I jobs (0=unlimited).\n"
+                            "# TYPE charaforge_t2i_jobs_queue_max gauge\n"
+                            f"charaforge_t2i_jobs_queue_max {max_queue}\n"
                         )
                     if manager is not None and hasattr(manager, "global_slot_usage"):
                         usage = manager.global_slot_usage()
                         used = int(usage.get("used", 0))
                         total = int(usage.get("max", 0))
+                        if total <= 0:
+                            total = int(settings.api.t2i_max_global_concurrent or 0)
+                            used = running
                         body += (
                             "# HELP charaforge_t2i_gpu_slots_used Used T2I GPU slots.\n"
                             "# TYPE charaforge_t2i_gpu_slots_used gauge\n"

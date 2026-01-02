@@ -23,6 +23,8 @@ class Metrics:
         self._duration_sum: Dict[Tuple[str, str], float] = {}
         self._duration_count: Dict[Tuple[str, str], int] = {}
         self._rate_limit_denied_total: Dict[str, int] = {}
+        self._auth_refresh_total: Dict[Tuple[str, str], int] = {}
+        self._auth_revoke_total: Dict[str, int] = {}
 
     def inc_in_flight(self) -> None:
         with self._lock:
@@ -51,6 +53,18 @@ class Metrics:
         with self._lock:
             self._rate_limit_denied_total[bucket] = self._rate_limit_denied_total.get(bucket, 0) + 1
 
+    def inc_auth_refresh(self, *, result: str, source: str) -> None:
+        result = str(result or "unknown")
+        source = str(source or "unknown")
+        with self._lock:
+            key = (result, source)
+            self._auth_refresh_total[key] = self._auth_refresh_total.get(key, 0) + 1
+
+    def inc_auth_revoke(self, *, reason: str) -> None:
+        reason = str(reason or "unknown")
+        with self._lock:
+            self._auth_revoke_total[reason] = self._auth_revoke_total.get(reason, 0) + 1
+
     def render_prometheus(self) -> str:
         lines: list[str] = []
         with self._lock:
@@ -59,6 +73,8 @@ class Metrics:
             duration_sum = dict(self._duration_sum)
             duration_count = dict(self._duration_count)
             rate_limit_denied_total = dict(self._rate_limit_denied_total)
+            auth_refresh_total = dict(self._auth_refresh_total)
+            auth_revoke_total = dict(self._auth_revoke_total)
 
         lines.append("# HELP charaforge_http_in_flight_requests In-flight HTTP requests.")
         lines.append("# TYPE charaforge_http_in_flight_requests gauge")
@@ -93,6 +109,22 @@ class Metrics:
             lines.append(
                 "charaforge_rate_limit_denied_total"
                 f'{{bucket="{_escape_label(bucket)}"}} {value}'
+            )
+
+        lines.append("# HELP charaforge_auth_refresh_total Refresh token attempts.")
+        lines.append("# TYPE charaforge_auth_refresh_total counter")
+        for (result, source), value in sorted(auth_refresh_total.items()):
+            lines.append(
+                "charaforge_auth_refresh_total"
+                f'{{result="{_escape_label(result)}",source="{_escape_label(source)}"}} {value}'
+            )
+
+        lines.append("# HELP charaforge_auth_revoke_total Refresh token/session revocations.")
+        lines.append("# TYPE charaforge_auth_revoke_total counter")
+        for reason, value in sorted(auth_revoke_total.items()):
+            lines.append(
+                "charaforge_auth_revoke_total"
+                f'{{reason="{_escape_label(reason)}"}} {value}'
             )
 
         return "\n".join(lines) + "\n"

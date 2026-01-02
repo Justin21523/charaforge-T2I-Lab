@@ -265,6 +265,8 @@ async def refresh_token(
     raw_refresh, source = _resolve_refresh_token(request, payload)
     if source == "cookie":
         _require_csrf(request)
+    metrics = getattr(request.app.state, "metrics", None)
+    source_label = source or "missing"
     record = refresh_store.verify(raw_refresh)
     if not record:
         peeked = refresh_store.peek(raw_refresh)
@@ -273,6 +275,12 @@ async def refresh_token(
             key_id = str(peeked.get("key_id") or "") if peeked.get("key_id") else ""
             revoked_subject = refresh_store.revoke_subject(subject) if subject else 0
             revoked_key = refresh_store.revoke_key_id(key_id) if key_id else 0
+            if metrics is not None:
+                try:
+                    metrics.inc_auth_refresh(result="replay", source=source_label)
+                    metrics.inc_auth_revoke(reason="refresh_replay")
+                except Exception:
+                    pass
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -284,6 +292,11 @@ async def refresh_token(
                     },
                 },
             )
+        if metrics is not None:
+            try:
+                metrics.inc_auth_refresh(result="unauthorized", source=source_label)
+            except Exception:
+                pass
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     subject = str(record.get("subject") or "")
@@ -319,6 +332,11 @@ async def refresh_token(
     )
     replay_window = int(settings.api.jwt_refresh_replay_window_seconds or 0)
     refresh_store.revoke(raw_refresh, reason="rotated", keep_seconds=replay_window)
+    if metrics is not None:
+        try:
+            metrics.inc_auth_refresh(result="success", source=source_label)
+        except Exception:
+            pass
     csrf_token = secrets.token_urlsafe(32)
     refresh_ttl_seconds = _normalize_refresh_ttl_seconds(int(settings.api.jwt_refresh_ttl_seconds or 0))
     _set_refresh_cookie(
@@ -350,6 +368,7 @@ async def logout(
         _require_csrf(request)
     deleted = 0
     all_sessions = bool(getattr(payload, "all", False))
+    metrics = getattr(request.app.state, "metrics", None)
     if all_sessions:
         record = refresh_store.verify(raw_refresh)
         if record:
@@ -357,6 +376,11 @@ async def logout(
     else:
         ok = refresh_store.revoke(raw_refresh)
         deleted = 1 if ok else 0
+    if metrics is not None:
+        try:
+            metrics.inc_auth_revoke(reason="logout_all" if all_sessions else "logout")
+        except Exception:
+            pass
     _clear_refresh_cookie(request, response)
     return {"status": "ok", "revoked": True, "count": deleted}
 
@@ -404,6 +428,12 @@ async def revoke_key(request: Request, key_id: str) -> Dict[str, Any]:
         revoked_refresh = _refresh_store(request).revoke_key_id(key_id)
     except Exception:
         revoked_refresh = 0
+    metrics = getattr(request.app.state, "metrics", None)
+    if metrics is not None:
+        try:
+            metrics.inc_auth_revoke(reason="key_revoke")
+        except Exception:
+            pass
     return {"status": "ok", "key_id": key_id, "revoked": True, "revoked_refresh_tokens": revoked_refresh}
 
 
@@ -420,6 +450,12 @@ async def rotate_key(request: Request, key_id: str) -> RotateKeyResponse:
         _refresh_store(request).revoke_key_id(key_id)
     except Exception:
         pass
+    metrics = getattr(request.app.state, "metrics", None)
+    if metrics is not None:
+        try:
+            metrics.inc_auth_revoke(reason="key_rotate")
+        except Exception:
+            pass
     record = next((k for k in store.list_keys(include_revoked=True) if k.get("key_id") == new_id), {})
 
     return RotateKeyResponse(

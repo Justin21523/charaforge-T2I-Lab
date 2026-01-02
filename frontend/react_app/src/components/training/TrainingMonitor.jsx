@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Play, RefreshCw, XCircle } from "lucide-react";
 import { useAPI } from "../../hooks/useAPI";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { buildTrainProgressWsUrl, useWebSocket } from "../../hooks/useWebSocket";
+import { buildTrainProgressWsProtocols, buildTrainProgressWsUrl, useWebSocket } from "../../hooks/useWebSocket";
 import { LORA_TRAINING_PRESETS } from "../../utils/constants";
 import Loading from "../common/Loading";
 import toast from "react-hot-toast";
@@ -97,6 +97,7 @@ const TrainingMonitor = () => {
   const { status: wsStatus, lastMessage: wsMessage } = useWebSocket(wsUrl, {
     enabled: Boolean(selectedJobId),
     reconnect: true,
+    protocols: buildTrainProgressWsProtocols,
   });
 
   useEffect(() => {
