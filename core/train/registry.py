@@ -382,13 +382,15 @@ class ModelRegistry:
 
     def get_model(self, name: str) -> Optional[ModelEntry]:
         """Get model by name"""
-        return self.models.get(name)
+        with self._lock:
+            return self.models.get(name)
 
     def list_models(
         self, model_type: Optional[str] = None, tags: Optional[List[str]] = None
     ) -> List[ModelEntry]:
         """List models with optional filtering"""
-        models = list(self.models.values())
+        with self._lock:
+            models = list(self.models.values())
 
         if model_type:
             models = [m for m in models if m.model_type == model_type]
@@ -538,8 +540,10 @@ class ModelRegistry:
         """Search models by name, description, or tags"""
         query = query.lower()
         results = []
+        with self._lock:
+            values = list(self.models.values())
 
-        for model in self.models.values():
+        for model in values:
             if (
                 query in model.name.lower()
                 or (model.description and query in model.description.lower())
