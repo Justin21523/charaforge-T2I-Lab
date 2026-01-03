@@ -70,7 +70,7 @@ def _error_payload(
 def _required_scope(path: str, method: str) -> str | None:
     if path == f"{API_V1_PREFIX}/metrics":
         return "metrics:read"
-    if path == f"{API_V1_PREFIX}/models/scan":
+    if path.startswith(f"{API_V1_PREFIX}/models/scan"):
         return "models:scan"
     if path.startswith(f"{API_V1_PREFIX}/models/"):
         return "models:read"
@@ -125,6 +125,14 @@ async def lifespan(app: FastAPI):
 
         if isinstance(manager, T2IJobManager):
             manager.shutdown()
+    except Exception:
+        pass
+    scan_manager = getattr(app.state, "model_scan_job_manager", None)
+    try:
+        from api.model_scan_jobs import ModelScanJobManager
+
+        if isinstance(scan_manager, ModelScanJobManager):
+            scan_manager.shutdown()
     except Exception:
         pass
 
@@ -199,6 +207,17 @@ def create_app() -> FastAPI:
         )
     except Exception as exc:
         logger.warning("T2I async jobs disabled: %s", exc)
+
+    try:
+        from api.model_scan_jobs import ModelScanJobManager
+
+        app.state.model_scan_job_manager = ModelScanJobManager(
+            redis_url=app.state.redis_url,
+            worker_enabled=bool(settings.api.models_scan_worker_enabled),
+            job_ttl_seconds=int(settings.api.models_scan_job_ttl_seconds or 0),
+        )
+    except Exception as exc:
+        logger.warning("Model scan jobs disabled: %s", exc)
 
     app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -313,7 +332,10 @@ def create_app() -> FastAPI:
 
         is_auth_token_request = path == f"{API_V1_PREFIX}/auth/token"
         is_auth_refresh_request = path == f"{API_V1_PREFIX}/auth/refresh"
-        is_scan_request = path == f"{API_V1_PREFIX}/models/scan"
+        is_scan_trigger_request = path in {
+            f"{API_V1_PREFIX}/models/scan",
+            f"{API_V1_PREFIX}/models/scan/submit",
+        }
         is_t2i_image_request = path.startswith(f"{API_V1_PREFIX}/t2i/images/")
         is_controlnet_image_request = path.startswith(f"{API_V1_PREFIX}/controlnet/images/")
         has_image_token = bool(request.query_params.get("img_token"))
@@ -399,7 +421,7 @@ def create_app() -> FastAPI:
         elif is_auth_refresh_request:
             special_bucket = "auth_refresh"
             special_limit = int(settings.api.auth_refresh_rate_limit or 0)
-        elif is_scan_request:
+        elif is_scan_trigger_request:
             special_bucket = "models_scan"
             special_limit = int(settings.api.scan_rate_limit or 0)
         elif path.startswith(f"{API_V1_PREFIX}/upload"):
