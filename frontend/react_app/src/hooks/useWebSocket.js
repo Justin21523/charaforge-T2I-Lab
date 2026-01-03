@@ -1,21 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const DEFAULT_RECONNECT_DELAY_MS = 1500;
-const STORAGE_API_KEY = "charaforge.apiKey";
-const STORAGE_USE_JWT = "charaforge.auth.useJwt";
-const STORAGE_JWT_ACCESS_TOKEN = "charaforge.jwt.accessToken";
-const STORAGE_JWT_EXPIRES_AT = "charaforge.jwt.expiresAt";
-
-const readStoredJson = (key, fallback) => {
-  try {
-    if (typeof window === "undefined") return fallback;
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw);
-  } catch (e) {
-    return fallback;
-  }
-};
 
 const toWsUrl = (httpBaseUrl, path) => {
   const url = new URL(httpBaseUrl);
@@ -28,22 +13,6 @@ const toWsUrl = (httpBaseUrl, path) => {
 
 export const buildTrainProgressWsUrl = (apiBaseUrl, jobId) =>
   toWsUrl(apiBaseUrl, `/api/v1/ws/train/${jobId}`);
-
-export const buildTrainProgressWsProtocols = () => {
-  const apiKey = readStoredJson(STORAGE_API_KEY, "") || "";
-  const useJwt = Boolean(readStoredJson(STORAGE_USE_JWT, false));
-  const accessToken = readStoredJson(STORAGE_JWT_ACCESS_TOKEN, "") || "";
-  const expiresAt = Number(readStoredJson(STORAGE_JWT_EXPIRES_AT, 0) || 0);
-  const now = Math.floor(Date.now() / 1000);
-
-  const protocols = ["charaforge"];
-  if (useJwt && accessToken && expiresAt > now + 10) {
-    protocols.push(`access_token.${accessToken}`);
-  } else if (apiKey) {
-    protocols.push(`api_key.${apiKey}`);
-  }
-  return protocols;
-};
 
 export const useWebSocket = (
   url,

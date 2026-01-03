@@ -1,5 +1,5 @@
 // frontend/react_app/src/components/common/Header.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, KeyRound, LogIn, LogOut, Palette, X } from "lucide-react";
 import toast from "react-hot-toast";
@@ -17,6 +17,10 @@ const Header = () => {
     "X-API-Key"
   );
   const [useJwt, setUseJwt] = useLocalStorage("charaforge.auth.useJwt", false);
+  const [clearApiKeyAfterLogin, setClearApiKeyAfterLogin] = useLocalStorage(
+    "charaforge.auth.clearApiKeyAfterLogin",
+    true
+  );
 
   const maskedKey = useMemo(() => {
     if (!storedApiKey) return "";
@@ -30,12 +34,29 @@ const Header = () => {
     apiService.setApiKey(storedApiKey, storedHeaderName);
     apiService.setUseJwt(Boolean(useJwt));
 
-    if (useJwt && storedApiKey) {
+    if (useJwt) {
       try {
-        await apiService.exchangeApiKeyForToken();
-        toast.success("JWT 已登入");
+        await apiService.bootstrapJwtSession({ silent: true });
       } catch (error) {
-        toast.error(error?.message || "JWT 登入失敗");
+        // ignore
+      }
+
+      if (!apiService.hasJwtSession() && storedApiKey) {
+        try {
+          await apiService.exchangeApiKeyForToken();
+        } catch (error) {
+          toast.error(error?.message || "JWT 登入失敗");
+        }
+      }
+
+      if (apiService.hasJwtSession()) {
+        if (clearApiKeyAfterLogin && storedApiKey) {
+          setStoredApiKey("");
+          apiService.clearApiKey();
+          toast.success("JWT 已登入（API Key 已清除）");
+        } else {
+          toast.success("JWT 已登入");
+        }
       }
     } else if (!useJwt) {
       toast.success(storedApiKey ? "API Key 已更新" : "API Key 已清除");
@@ -62,7 +83,23 @@ const Header = () => {
     }
   };
 
-  const jwtInfo = apiService.getJwtInfo();
+  const [jwtInfo, setJwtInfo] = useState(() => apiService.getJwtInfo());
+  useEffect(() => {
+    const handler = () => setJwtInfo(apiService.getJwtInfo());
+    try {
+      window.addEventListener("charaforge:authChanged", handler);
+    } catch (e) {
+      // ignore
+    }
+    return () => {
+      try {
+        window.removeEventListener("charaforge:authChanged", handler);
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, []);
+
   const jwtLoggedIn = Boolean(jwtInfo?.accessToken);
 
   return (
@@ -149,6 +186,18 @@ const Header = () => {
                       狀態：{jwtLoggedIn ? "已登入" : "未登入"}
                       {jwtLoggedIn && jwtInfo?.role ? `（${jwtInfo.role}）` : ""}
                     </div>
+                    <div className="auth-jwt-options">
+                      <label className="auth-panel-toggle">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(clearApiKeyAfterLogin)}
+                          onChange={(e) => setClearApiKeyAfterLogin(e.target.checked)}
+                        />
+                        <span className="auth-panel-toggle-text">
+                          登入後清除 API Key（建議）
+                        </span>
+                      </label>
+                    </div>
                     <div className="auth-jwt-actions">
                       <button
                         type="button"
@@ -156,7 +205,13 @@ const Header = () => {
                         onClick={async () => {
                           try {
                             await apiService.exchangeApiKeyForToken();
-                            toast.success("JWT 已登入");
+                            if (clearApiKeyAfterLogin && storedApiKey) {
+                              setStoredApiKey("");
+                              apiService.clearApiKey();
+                              toast.success("JWT 已登入（API Key 已清除）");
+                            } else {
+                              toast.success("JWT 已登入");
+                            }
                             checkHealth();
                           } catch (error) {
                             toast.error(error?.message || "JWT 登入失敗");

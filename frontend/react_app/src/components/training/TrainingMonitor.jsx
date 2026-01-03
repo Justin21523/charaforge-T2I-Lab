@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Play, RefreshCw, XCircle } from "lucide-react";
 import { useAPI } from "../../hooks/useAPI";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { buildTrainProgressWsProtocols, buildTrainProgressWsUrl, useWebSocket } from "../../hooks/useWebSocket";
+import { buildTrainProgressWsUrl, useWebSocket } from "../../hooks/useWebSocket";
 import { LORA_TRAINING_PRESETS } from "../../utils/constants";
 import Loading from "../common/Loading";
 import toast from "react-hot-toast";
@@ -94,10 +94,26 @@ const TrainingMonitor = () => {
     () => (selectedJobId ? buildTrainProgressWsUrl(API_BASE_URL, selectedJobId) : null),
     [selectedJobId]
   );
+
+  const wsProtocols = useCallback(() => {
+    const protocols = ["charaforge"];
+    const now = Math.floor(Date.now() / 1000);
+    const jwtInfo = apiService.getJwtInfo();
+    if (apiService.getUseJwt() && jwtInfo?.accessToken && jwtInfo?.expiresAt > now + 10) {
+      protocols.push(`access_token.${jwtInfo.accessToken}`);
+      return protocols;
+    }
+    const apiKey = apiService.getApiKey();
+    if (apiKey) {
+      protocols.push(`api_key.${apiKey}`);
+    }
+    return protocols;
+  }, [apiService]);
+
   const { status: wsStatus, lastMessage: wsMessage } = useWebSocket(wsUrl, {
     enabled: Boolean(selectedJobId),
     reconnect: true,
-    protocols: buildTrainProgressWsProtocols,
+    protocols: wsProtocols,
   });
 
   useEffect(() => {
