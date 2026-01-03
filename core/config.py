@@ -227,6 +227,17 @@ class APIConfig(BaseSettings):
         default=True,
         validation_alias=AliasChoices("WS_ALLOW_QUERY_AUTH", "API_WS_ALLOW_QUERY_AUTH"),
     )
+    ws_ticket_ttl_seconds: int = Field(
+        default=30,
+        ge=0,
+        validation_alias=AliasChoices("WS_TICKET_TTL_SECONDS", "API_WS_TICKET_TTL_SECONDS"),
+    )
+    ws_ticket_replay_protection: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "WS_TICKET_REPLAY_PROTECTION", "API_WS_TICKET_REPLAY_PROTECTION"
+        ),
+    )
     jwt_access_ttl_seconds: int = Field(
         default=900,
         ge=0,
