@@ -12,9 +12,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from api.train_access import read_train_access_owner, write_train_access_meta
 from core.config import get_cache_paths, get_settings
 
 router = APIRouter(prefix="/finetune", tags=["finetune"])
@@ -24,6 +25,23 @@ def _get_celery_app():
     try:
         from workers.celery_app import celery_app
 
+        settings = get_settings()
+        url = str(getattr(settings.celery, "broker_url", "") or "")
+        if url.startswith("redis"):
+            try:
+                import redis  # type: ignore
+
+                client = redis.Redis.from_url(
+                    url,
+                    socket_connect_timeout=0.2,
+                    socket_timeout=0.2,
+                    retry_on_timeout=False,
+                    decode_responses=True,
+                )
+                if not client.ping():
+                    return None
+            except Exception:
+                return None
         return celery_app
     except Exception:
         return None
@@ -62,6 +80,26 @@ def _resolve_dataset_path(value: str) -> str:
 
     return str(resolved)
 
+def _is_admin(request: Request) -> bool:
+    return getattr(request.state, "auth_role", "anonymous") == "admin"
+
+
+def _require_job_access(request: Request, job_id: str) -> str:
+    auth_enabled = bool(getattr(request.app.state, "auth_enabled", False))
+    if not auth_enabled:
+        return getattr(request.state, "client_key", "ip:unknown")
+
+    owner = read_train_access_owner(job_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if _is_admin(request):
+        return owner
+
+    client_key = getattr(request.state, "client_key", "ip:unknown")
+    if client_key != owner:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return owner
+
 
 class LoRATrainRequest(BaseModel):
     project_name: str = Field(..., min_length=1, max_length=100)
@@ -92,7 +130,7 @@ class LoRATrainRequest(BaseModel):
 
 
 @router.post("/lora/train")
-async def submit_lora_train(req: LoRATrainRequest) -> Dict[str, Any]:
+async def submit_lora_train(req: LoRATrainRequest, request: Request) -> Dict[str, Any]:
     settings = get_settings()
 
     base_model = req.base_model
@@ -105,6 +143,7 @@ async def submit_lora_train(req: LoRATrainRequest) -> Dict[str, Any]:
 
     job_id = f"lora_{req.project_name}_{uuid.uuid4().hex[:8]}"
     celery_app = _get_celery_app()
+    owner = getattr(request.state, "client_key", "ip:unknown")
 
     resolved_dataset_path = _resolve_dataset_path(req.dataset_path)
 
@@ -128,6 +167,8 @@ async def submit_lora_train(req: LoRATrainRequest) -> Dict[str, Any]:
         "validation_steps": req.validation_steps,
         "max_samples": req.max_samples,
     }
+
+    write_train_access_meta(job_id, owner=owner)
 
     if celery_app is None:
         return {
@@ -160,7 +201,8 @@ async def submit_lora_train(req: LoRATrainRequest) -> Dict[str, Any]:
 
 
 @router.get("/lora/status/{job_id}")
-async def lora_status(job_id: str) -> Dict[str, Any]:
+async def lora_status(job_id: str, request: Request) -> Dict[str, Any]:
+    _require_job_access(request, job_id)
     celery_app = _get_celery_app()
     if celery_app is None:
         return {"job_id": job_id, "status": "UNKNOWN", "note": "Celery not available"}
@@ -180,7 +222,8 @@ async def lora_status(job_id: str) -> Dict[str, Any]:
 
 
 @router.post("/lora/cancel/{job_id}")
-async def cancel_lora(job_id: str) -> Dict[str, Any]:
+async def cancel_lora(job_id: str, request: Request) -> Dict[str, Any]:
+    _require_job_access(request, job_id)
     celery_app = _get_celery_app()
     if celery_app is None:
         raise HTTPException(status_code=503, detail="Celery not available")
