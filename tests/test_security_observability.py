@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 
@@ -7,8 +8,10 @@ from httpx import ASGITransport
 
 import core.config as config
 from api.main import create_app
+from api.routers.ws import ws_train_progress
 from api.t2i_jobs import access_meta_path, read_access_owner
 from api.t2i_tokens import make_image_token
+from api.train_access import write_train_access_meta
 from api.ws_tickets import verify_ws_ticket
 
 
@@ -170,6 +173,17 @@ async def test_ws_ticket_requires_auth_and_is_signed(make_app):
             json={"job_id": "job_1"},
             headers={"X-API-Key": "user_key"},
         )
+        assert issued.status_code == 404
+        _assert_error_schema(issued)
+
+        owner = f"key:{hashlib.sha256('user_key'.encode('utf-8')).hexdigest()[:32]}"
+        write_train_access_meta("job_1", owner=owner)
+
+        issued = await client.post(
+            "/api/v1/auth/ws_ticket",
+            json={"job_id": "job_1"},
+            headers={"X-API-Key": "user_key"},
+        )
         assert issued.status_code == 200
         body = issued.json()
         assert body.get("job_id") == "job_1"
@@ -229,6 +243,135 @@ async def test_ws_ticket_respects_scope_and_can_be_disabled(make_app):
         )
         assert disabled.status_code == 503
         _assert_error_schema(disabled)
+
+
+@pytest.mark.anyio
+async def test_training_job_owner_only_for_status_and_ws_ticket(make_app, tmp_path):
+    project_slug = "testproj"
+    datasets_root = tmp_path / "datasets"
+    training_root = tmp_path / "training"
+    cache_root = tmp_path / "cache"
+    models_root = tmp_path / "models"
+    (datasets_root / project_slug / "raw" / "ds1").mkdir(parents=True, exist_ok=True)
+
+    app = make_app(
+        PROJECT_SLUG=project_slug,
+        AI_DATASETS_ROOT=str(datasets_root),
+        AI_TRAINING_ROOT=str(training_root),
+        AI_CACHE_ROOT=str(cache_root),
+        XDG_CACHE_HOME=str(cache_root),
+        HF_HOME=str(cache_root / "huggingface"),
+        TRANSFORMERS_CACHE=str(cache_root / "huggingface"),
+        TORCH_HOME=str(cache_root / "torch"),
+        AI_MODELS_ROOT=str(models_root),
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key_1,user_key_2",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        API_WS_ALLOW_QUERY_AUTH="false",
+        API_WS_TICKET_TTL_SECONDS="30",
+    )
+
+    owner_key = "user_key_1"
+    other_key = "user_key_2"
+    job_id = "lora_proj1_deadbeef"
+    owner = f"key:{hashlib.sha256(owner_key.encode('utf-8')).hexdigest()[:32]}"
+    write_train_access_meta(job_id, owner=owner)
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        owner_status = await client.get(
+            f"/api/v1/finetune/lora/status/{job_id}",
+            headers={"X-API-Key": owner_key},
+        )
+        assert owner_status.status_code == 200
+
+        other_status = await client.get(
+            f"/api/v1/finetune/lora/status/{job_id}",
+            headers={"X-API-Key": other_key},
+        )
+        assert other_status.status_code == 403
+        _assert_error_schema(other_status)
+
+        owner_ticket = await client.post(
+            "/api/v1/auth/ws_ticket",
+            headers={"X-API-Key": owner_key},
+            json={"job_id": job_id},
+        )
+        assert owner_ticket.status_code == 200
+
+        other_ticket = await client.post(
+            "/api/v1/auth/ws_ticket",
+            headers={"X-API-Key": other_key},
+            json={"job_id": job_id},
+        )
+        assert other_ticket.status_code == 403
+        _assert_error_schema(other_ticket)
+
+
+@pytest.mark.anyio
+async def test_ws_train_progress_forbidden_when_not_owner(make_app, tmp_path):
+    project_slug = "testproj"
+    datasets_root = tmp_path / "datasets"
+    training_root = tmp_path / "training"
+    cache_root = tmp_path / "cache"
+    models_root = tmp_path / "models"
+    (datasets_root / project_slug / "raw").mkdir(parents=True, exist_ok=True)
+
+    app = make_app(
+        PROJECT_SLUG=project_slug,
+        AI_DATASETS_ROOT=str(datasets_root),
+        AI_TRAINING_ROOT=str(training_root),
+        AI_CACHE_ROOT=str(cache_root),
+        XDG_CACHE_HOME=str(cache_root),
+        HF_HOME=str(cache_root / "huggingface"),
+        TRANSFORMERS_CACHE=str(cache_root / "huggingface"),
+        TORCH_HOME=str(cache_root / "torch"),
+        AI_MODELS_ROOT=str(models_root),
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key_1,user_key_2",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        API_WS_ALLOW_QUERY_AUTH="false",
+    )
+
+    owner_key = "user_key_1"
+    other_key = "user_key_2"
+    job_id = "lora_proj1_deadbeef"
+    owner = f"key:{hashlib.sha256(owner_key.encode('utf-8')).hexdigest()[:32]}"
+    write_train_access_meta(job_id, owner=owner)
+
+    class FakeClient:
+        host = "127.0.0.1"
+
+    class FakeWebSocket:
+        def __init__(self):  # type: ignore[no-untyped-def]
+            self.app = app
+            self.headers = {
+                "sec-websocket-protocol": f"charaforge, api_key.{other_key}",
+            }
+            self.query_params = {}
+            self.client = FakeClient()
+            self.accepted_subprotocol = None
+            self.sent = []
+            self.closed_code = None
+
+        async def accept(self, subprotocol=None):  # type: ignore[no-untyped-def]
+            self.accepted_subprotocol = subprotocol
+
+        async def send_json(self, payload):  # type: ignore[no-untyped-def]
+            self.sent.append(payload)
+
+        async def close(self, code=1000):  # type: ignore[no-untyped-def]
+            self.closed_code = code
+
+    ws = FakeWebSocket()
+    await ws_train_progress(ws, job_id)
+    assert ws.closed_code == 4403
+    assert ws.sent and ws.sent[0].get("topic") == "ws.error"
+    assert ws.sent[0].get("message") == "Forbidden"
 
 
 @pytest.mark.anyio
