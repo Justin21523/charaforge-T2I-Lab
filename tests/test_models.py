@@ -215,3 +215,62 @@ async def test_models_scan_job_submit_returns_409_when_active(tmp_path: Path):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=2.0)
+
+
+@pytest.mark.anyio
+async def test_models_scan_job_can_cancel_while_running(monkeypatch):
+    from core.train.registry import ModelScanCancelledError, get_model_registry
+
+    models_root = Path(os.environ["AI_MODELS_ROOT"])
+
+    _touch(models_root / "stable-diffusion" / "sd15" / "demo_sd15" / "model_index.json")
+    _touch(models_root / "stable-diffusion" / "sdxl" / "demo_sdxl" / "model_index.json")
+
+    registry = get_model_registry()
+    original_dir_size = registry._calculate_dir_size
+
+    def _slow_dir_size(path: Path, *, cancel_check=None, heartbeat=None) -> float:
+        for _ in range(80):
+            if cancel_check is not None and cancel_check():
+                raise ModelScanCancelledError("Cancelled")
+            if heartbeat is not None:
+                heartbeat()
+            time.sleep(0.01)
+        return original_dir_size(path, cancel_check=cancel_check, heartbeat=heartbeat)
+
+    monkeypatch.setattr(registry, "_calculate_dir_size", _slow_dir_size)
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        submitted = await client.post("/api/v1/models/scan/submit", json={"replace": True})
+        assert submitted.status_code == 200
+        job_id = submitted.json()["job_id"]
+
+        snapshot: dict | None = None
+        for _ in range(80):
+            res = await client.get(f"/api/v1/models/scan/status/{job_id}")
+            assert res.status_code == 200
+            snapshot = res.json()
+            if snapshot.get("status") == "running":
+                break
+            if snapshot.get("status") in {"succeeded", "failed", "canceled"}:
+                break
+            await asyncio.sleep(0.02)
+
+        assert snapshot is not None
+        assert snapshot.get("status") == "running"
+
+        res = await client.post(f"/api/v1/models/scan/cancel/{job_id}")
+        assert res.status_code == 200
+
+        for _ in range(120):
+            res = await client.get(f"/api/v1/models/scan/status/{job_id}")
+            assert res.status_code == 200
+            snapshot = res.json()
+            if snapshot.get("status") in {"succeeded", "failed", "canceled"}:
+                break
+            await asyncio.sleep(0.02)
+
+        assert snapshot is not None
+        assert snapshot.get("status") == "canceled"
+        assert snapshot.get("cancel_requested") is True
