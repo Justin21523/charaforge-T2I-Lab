@@ -43,10 +43,15 @@ def _parse_ws_protocols(value: str | None) -> list[str]:
 @router.websocket("/train/{job_id}")
 async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     settings = get_settings()
+    metrics = getattr(getattr(websocket, "app", None), "state", None)
+    metrics = getattr(metrics, "metrics", None)
     admin_keys = parse_api_keys(settings.api.api_admin_keys)
     user_keys = parse_api_keys(settings.api.api_keys)
     if settings.api.api_key:
         admin_keys.add(settings.api.api_key)
+
+    protocols = _parse_ws_protocols(websocket.headers.get("sec-websocket-protocol"))
+    selected_subprotocol = "charaforge" if "charaforge" in protocols else None
 
     api_key_store = None
     try:
@@ -60,7 +65,6 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     if auth_enabled:
         required_scope = "train:manage"
 
-        protocols = _parse_ws_protocols(websocket.headers.get("sec-websocket-protocol"))
         proto_access_token = ""
         proto_api_key = ""
         for proto in protocols:
@@ -69,11 +73,19 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
             elif proto.startswith("api_key."):
                 proto_api_key = proto.split(".", 1)[1]
 
-        access_token = proto_access_token or websocket.query_params.get("access_token")
+        allow_query_auth = bool(getattr(settings.api, "ws_allow_query_auth", True))
+        access_token = proto_access_token or (
+            websocket.query_params.get("access_token") if allow_query_auth else None
+        )
         if access_token:
             payload = verify_access_token(access_token)
             if not payload:
-                await websocket.accept()
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="unauthorized")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
                 await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
                 await websocket.close(code=4401)
                 return
@@ -84,7 +96,12 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 scopes_raw = [scopes_raw]
             scopes = {str(s).strip() for s in scopes_raw if str(s).strip()}
             if scopes and not scope_allows(scopes, required_scope):
-                await websocket.accept()
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="forbidden")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
                 await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
                 await websocket.close(code=4403)
                 return
@@ -96,8 +113,8 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
             presented = (
                 websocket.headers.get(header_name)
                 or proto_api_key
-                or websocket.query_params.get("api_key")
-                or websocket.query_params.get("token")
+                or (websocket.query_params.get("api_key") if allow_query_auth else None)
+                or (websocket.query_params.get("token") if allow_query_auth else None)
             )
             auth = resolve_api_key(
                 presented,
@@ -106,18 +123,34 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 key_store=api_key_store,
             )
             if not auth:
-                await websocket.accept()
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="unauthorized")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
                 await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
                 await websocket.close(code=4401)
                 return
 
             if auth.scopes and not scope_allows(auth.scopes, required_scope):
-                await websocket.accept()
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="forbidden")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
                 await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
                 await websocket.close(code=4403)
                 return
 
-    await websocket.accept()
+    await websocket.accept(subprotocol=selected_subprotocol)
+    if metrics is not None:
+        try:
+            metrics.inc_ws_connection(endpoint="train", outcome="accepted")
+            metrics.inc_ws_active()
+        except Exception:
+            pass
 
     try:
         import redis.asyncio as redis  # type: ignore
@@ -129,6 +162,12 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
             }
         )
         await websocket.close(code=1011)
+        if metrics is not None:
+            try:
+                metrics.dec_ws_active()
+                metrics.inc_ws_disconnect(endpoint="train", code="1011")
+            except Exception:
+                pass
         return
 
     url = _redis_url()
@@ -137,6 +176,7 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     client = redis.from_url(url, decode_responses=True)
     pubsub = client.pubsub()
 
+    disconnect_code: str | None = None
     try:
         await pubsub.subscribe(channel)
         await websocket.send_json({"topic": "ws.subscribed", "channel": channel})
@@ -155,7 +195,8 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                     await websocket.send_json(payload)
                 else:
                     await asyncio.sleep(0.1)
-            except WebSocketDisconnect:
+            except WebSocketDisconnect as exc:
+                disconnect_code = str(getattr(exc, "code", "") or "1000")
                 break
     finally:
         try:
@@ -170,3 +211,9 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
             await client.close()
         except Exception:
             pass
+        if metrics is not None:
+            try:
+                metrics.dec_ws_active()
+                metrics.inc_ws_disconnect(endpoint="train", code=disconnect_code or "unknown")
+            except Exception:
+                pass

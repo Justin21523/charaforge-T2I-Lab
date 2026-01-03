@@ -223,6 +223,10 @@ class APIConfig(BaseSettings):
     api_keys: str = Field(default="", validation_alias=AliasChoices("KEYS", "API_KEYS"))
     api_admin_keys: str = Field(default="", validation_alias=AliasChoices("ADMIN_KEYS", "API_ADMIN_KEYS"))
     key_header: str = Field(default="X-API-Key")
+    ws_allow_query_auth: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("WS_ALLOW_QUERY_AUTH", "API_WS_ALLOW_QUERY_AUTH"),
+    )
     jwt_access_ttl_seconds: int = Field(
         default=900,
         ge=0,

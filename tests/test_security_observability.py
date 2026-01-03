@@ -248,6 +248,9 @@ async def test_metrics_endpoint_when_enabled(make_app):
         assert "charaforge_http_requests_total" in ok.text
         assert "charaforge_auth_refresh_total" in ok.text
         assert "charaforge_auth_revoke_total" in ok.text
+        assert "charaforge_ws_active_connections" in ok.text
+        assert "charaforge_ws_connections_total" in ok.text
+        assert "charaforge_ws_disconnect_total" in ok.text
 
         res = await client.get("/api/v1/metrics", headers={"X-API-Key": "admin_key"})
         assert res.status_code == 200

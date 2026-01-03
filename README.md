@@ -85,7 +85,7 @@ npm run dev
 
 - Set `API_ADMIN_KEYS` and/or `API_KEYS` (comma-separated) to require an API key for `/api/v1/*` (health/readiness/liveness stay open).
 - `/api/v1/models/scan` requires an `admin` key when auth is enabled.
-- For browser WebSockets, pass auth via `Sec-WebSocket-Protocol`: `["charaforge","access_token.<JWT>"]` or `["charaforge","api_key.<KEY>"]` (query params are still supported for legacy clients).
+- For browser WebSockets, pass auth via `Sec-WebSocket-Protocol`: `["charaforge","access_token.<JWT>"]` or `["charaforge","api_key.<KEY>"]` (query params are supported for legacy clients; disable with `API_WS_ALLOW_QUERY_AUTH=false`).
 - Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
 - Auth buckets: `API_AUTH_TOKEN_RATE_LIMIT` and `API_AUTH_REFRESH_RATE_LIMIT` (requests/minute, 0 disables).
 - Bucket limits: `API_UPLOAD_RATE_LIMIT` and `API_DATASETS_RATE_LIMIT` (requests/minute, 0 disables).
