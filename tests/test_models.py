@@ -363,3 +363,96 @@ def test_models_scan_redis_backend_sets_ttl_for_running_jobs(monkeypatch):
     backend._save_job("job_1", {"status": "canceled"})
     last_set = next(call for call in reversed(fake.calls) if call[0] == "set")
     assert last_set[2] == 10
+
+
+@pytest.mark.anyio
+async def test_models_scan_jobs_cleanup_endpoint_exists():
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/api/v1/models/scan/jobs/cleanup")
+        assert res.status_code == 200
+        payload = res.json()
+        assert set(payload) >= {"dry_run", "owner", "scanned", "stale", "removed"}
+        assert payload["dry_run"] is True
+
+
+def test_models_scan_redis_cleanup_removes_stale_index_entries(monkeypatch):
+    import api.model_scan_jobs as scan_jobs
+
+    class FakePipeline:
+        def __init__(self, client):  # type: ignore[no-untyped-def]
+            self._client = client
+            self._commands: list[tuple[str, str]] = []
+
+        def exists(self, key: str):  # type: ignore[no-untyped-def]
+            self._commands.append(("exists", key))
+            return self
+
+        def execute(self):  # type: ignore[no-untyped-def]
+            out = []
+            for name, key in self._commands:
+                if name == "exists":
+                    out.append(1 if self._client.exists(key) else 0)
+            return out
+
+    class FakeRedisClient:
+        def __init__(self) -> None:
+            self._zsets: dict[str, dict[str, float]] = {}
+            self._keys: set[str] = set()
+
+        def pipeline(self):  # type: ignore[no-untyped-def]
+            return FakePipeline(self)
+
+        def exists(self, key: str) -> int:  # type: ignore[no-untyped-def]
+            return 1 if key in self._keys else 0
+
+        def zrange(self, key: str, start: int, end: int):  # type: ignore[no-untyped-def]
+            items = list((self._zsets.get(key) or {}).items())
+            items.sort(key=lambda kv: kv[1])
+            members = [member for member, _ in items]
+            if not members:
+                return []
+            if end < 0:
+                end = len(members) + end
+            return members[start : end + 1]
+
+        def zrem(self, key: str, *members: str) -> int:  # type: ignore[no-untyped-def]
+            zset = self._zsets.get(key) or {}
+            removed = 0
+            for member in members:
+                if member in zset:
+                    zset.pop(member, None)
+                    removed += 1
+            self._zsets[key] = zset
+            return removed
+
+    fake = FakeRedisClient()
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(*args, **kwargs):  # type: ignore[no-untyped-def]
+            return fake
+
+    monkeypatch.setattr(scan_jobs, "redis", FakeRedisModule)
+
+    backend = scan_jobs._RedisBackend(
+        "redis://test",
+        worker_enabled=False,
+        job_ttl_seconds=10,
+    )
+
+    index = backend._jobs_index_key()
+    fake._zsets[index] = {"job_a": 1.0, "job_b": 2.0}
+    fake._keys.add(backend._job_key("job_b"))
+
+    dry = backend.cleanup_jobs(limit=10, dry_run=True)
+    assert dry["scanned"] == 2
+    assert dry["stale"] == 1
+    assert dry["removed"] == 0
+    assert "job_a" in fake._zsets[index]
+
+    cleaned = backend.cleanup_jobs(limit=10, dry_run=False)
+    assert cleaned["scanned"] == 2
+    assert cleaned["stale"] == 1
+    assert cleaned["removed"] == 1
+    assert "job_a" not in fake._zsets[index]
