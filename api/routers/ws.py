@@ -13,11 +13,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api.jwt_tokens import verify_access_token
 from api.security import parse_api_keys, resolve_api_key, scope_allows
+from api.ws_tickets import verify_ws_ticket
 from core.config import get_settings
 
 router = APIRouter(prefix="/ws", tags=["ws"])
@@ -62,6 +64,7 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
         api_key_store = None
 
     auth_enabled = bool(admin_keys or user_keys or (api_key_store and api_key_store.has_active_keys()))
+    ws_ticket_payload: dict | None = None
     if auth_enabled:
         required_scope = "train:manage"
 
@@ -72,11 +75,15 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 proto_access_token = proto.split(".", 1)[1]
             elif proto.startswith("api_key."):
                 proto_api_key = proto.split(".", 1)[1]
+            elif proto.startswith("ws_ticket."):
+                ws_ticket_payload = verify_ws_ticket(proto.split(".", 1)[1])
 
         allow_query_auth = bool(getattr(settings.api, "ws_allow_query_auth", True))
-        access_token = proto_access_token or (
-            websocket.query_params.get("access_token") if allow_query_auth else None
-        )
+        access_token = None
+        if not ws_ticket_payload:
+            access_token = proto_access_token or (
+                websocket.query_params.get("access_token") if allow_query_auth else None
+            )
         if access_token:
             payload = verify_access_token(access_token)
             if not payload:
@@ -105,6 +112,38 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
                 await websocket.close(code=4403)
                 return
+            if not scopes and role != "admin":
+                # Legacy un-scoped keys are allowed (matches HTTP middleware behavior).
+                pass
+        elif ws_ticket_payload:
+            if str(ws_ticket_payload.get("job_id") or "") != str(job_id):
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="forbidden")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
+                await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
+                await websocket.close(code=4403)
+                return
+
+            role = str(ws_ticket_payload.get("role") or "user")
+            scopes_raw = ws_ticket_payload.get("scopes") or []
+            if isinstance(scopes_raw, str):
+                scopes_raw = [scopes_raw]
+            scopes = {str(s).strip() for s in scopes_raw if str(s).strip()}
+
+            if scopes and not scope_allows(scopes, required_scope):
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="forbidden")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
+                await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
+                await websocket.close(code=4403)
+                return
+
             if not scopes and role != "admin":
                 # Legacy un-scoped keys are allowed (matches HTTP middleware behavior).
                 pass
@@ -178,6 +217,25 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
 
     disconnect_code: str | None = None
     try:
+        if ws_ticket_payload and bool(getattr(settings.api, "ws_ticket_replay_protection", True)):
+            jti = str(ws_ticket_payload.get("jti") or "")
+            exp = int(ws_ticket_payload.get("exp") or 0)
+            now = int(time.time())
+            ttl = max(1, exp - now + 5)
+            ticket_key = f"charaforge:ws_ticket:{jti}"
+            try:
+                ok = await client.set(ticket_key, "1", nx=True, ex=ttl)
+            except Exception:
+                await websocket.send_json(
+                    {"topic": "ws.error", "message": "Service unavailable"}
+                )
+                await websocket.close(code=1011)
+                return
+            if not ok:
+                await websocket.send_json({"topic": "ws.error", "message": "Unauthorized"})
+                await websocket.close(code=4401)
+                return
+
         await pubsub.subscribe(channel)
         await websocket.send_json({"topic": "ws.subscribed", "channel": channel})
 
