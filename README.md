@@ -51,6 +51,11 @@ bash scripts/start_api.sh
 bash scripts/start_t2i_worker.sh
 ```
 
+3b) Start models scan worker (async scan queue):
+```bash
+bash scripts/start_models_scan_worker.sh
+```
+
 4) Start worker (training queue):
 ```bash
 bash scripts/start_worker.sh
@@ -60,6 +65,9 @@ bash scripts/start_worker.sh
 ```bash
 python scripts/scan_models.py --replace
 # or: curl -X POST http://localhost:8000/api/v1/models/scan -H 'Content-Type: application/json' -d '{"replace":true}'
+
+# Async job (recommended for production; see /api/v1/models/scan/*):
+# curl -sS -X POST http://localhost:8000/api/v1/models/scan/submit -H 'Content-Type: application/json' -d '{"replace":true}'
 ```
 
 6) Start React UI:
@@ -72,6 +80,7 @@ npm run dev
 ## API (Base Prefix: `/api/v1`)
 
 - Health: `GET /api/v1/health`
+- Models: `GET /api/v1/models`, `POST /api/v1/models/scan`, `POST /api/v1/models/scan/submit`, `GET /api/v1/models/scan/status/{job_id}`, `POST /api/v1/models/scan/cancel/{job_id}`, `GET /api/v1/models/scan/jobs`, `DELETE /api/v1/models/scan/jobs/{job_id}`
 - Auth: `GET /api/v1/auth/me`, `POST /api/v1/auth/token`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `POST /api/v1/auth/ws_ticket`, `GET|POST /api/v1/auth/keys/*` (admin)
 - T2I: `POST /api/v1/t2i/generate`, `POST /api/v1/t2i/submit`, `GET /api/v1/t2i/status/{job_id}`, `POST /api/v1/t2i/cancel/{job_id}`, `GET /api/v1/t2i/jobs`, `DELETE /api/v1/t2i/jobs/{job_id}`
 - ControlNet: `POST /api/v1/controlnet/{pose|depth|canny|lineart}`
