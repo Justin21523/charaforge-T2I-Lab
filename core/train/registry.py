@@ -8,7 +8,7 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from core.config import get_cache_paths
 from core.file_lock import file_lock
@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 REGISTRY_WRITE_LOCK_TIMEOUT_SECONDS = 5.0
 SCAN_LOCK_TIMEOUT_SECONDS = 0.0
+
+
+class ModelScanCancelledError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -146,42 +150,93 @@ class ModelRegistry:
         except Exception as e:
             logger.error(f"Error saving registries: {e}")
 
-    def scan_filesystem(self, replace: bool = False) -> Dict[str, Any]:
+    def scan_filesystem(
+        self,
+        replace: bool = False,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> Dict[str, Any]:
         """Scan `/mnt/c/ai_models` and update `registry.json`.
 
         Args:
             replace: When True, rebuild the registry from disk (keeps presets).
         """
+        def _safe_cancel() -> bool:
+            if cancel_check is None:
+                return False
+            try:
+                return bool(cancel_check())
+            except Exception:
+                return False
+
+        def _safe_heartbeat() -> None:
+            if heartbeat is None:
+                return
+            try:
+                heartbeat()
+            except Exception:
+                return
+
+        def _raise_if_cancelled() -> None:
+            if _safe_cancel():
+                raise ModelScanCancelledError("Cancelled")
+
         try:
             with self._lock:
                 with file_lock(
                     self._scan_lock_path(), timeout_s=SCAN_LOCK_TIMEOUT_SECONDS
                 ):
-                    before = len(self.models)
+                    _raise_if_cancelled()
+                    _safe_heartbeat()
 
+                    before = len(self.models)
+                    snapshot_models = self.models
                     existing_usage = {
                         name: (entry.created_at, entry.last_used)
-                        for name, entry in self.models.items()
+                        for name, entry in snapshot_models.items()
                     }
 
                     if replace:
                         self.models = {}
+                    else:
+                        self.models = {
+                            name: ModelEntry(**entry.to_dict())
+                            for name, entry in snapshot_models.items()
+                        }
 
-                    added = 0
-                    added += self._discover_base_models()
-                    added += self._discover_controlnet_models()
-                    added += self._discover_lora_models()
-                    added += self._discover_embeddings()
+                    try:
+                        added = 0
+                        _raise_if_cancelled()
+                        added += self._discover_base_models(
+                            cancel_check=_safe_cancel, heartbeat=_safe_heartbeat
+                        )
+                        _raise_if_cancelled()
+                        added += self._discover_controlnet_models(
+                            cancel_check=_safe_cancel, heartbeat=_safe_heartbeat
+                        )
+                        _raise_if_cancelled()
+                        added += self._discover_lora_models(
+                            cancel_check=_safe_cancel, heartbeat=_safe_heartbeat
+                        )
+                        _raise_if_cancelled()
+                        added += self._discover_embeddings(
+                            cancel_check=_safe_cancel, heartbeat=_safe_heartbeat
+                        )
 
-                    # Preserve usage timestamps for unchanged model ids.
-                    for name, entry in self.models.items():
-                        created_at, last_used = existing_usage.get(name, (None, None))
-                        if created_at and not entry.created_at:
-                            entry.created_at = created_at
-                        if last_used and not entry.last_used:
-                            entry.last_used = last_used
+                        # Preserve usage timestamps for unchanged model ids.
+                        for name, entry in self.models.items():
+                            created_at, last_used = existing_usage.get(name, (None, None))
+                            if created_at and not entry.created_at:
+                                entry.created_at = created_at
+                            if last_used and not entry.last_used:
+                                entry.last_used = last_used
 
-                    self._save_registries()
+                        _raise_if_cancelled()
+                        self._save_registries()
+                    except Exception:
+                        self.models = snapshot_models
+                        raise
 
                     return {
                         "status": "ok",
@@ -216,7 +271,12 @@ class ModelRegistry:
             self.models[entry.name] = entry
             return existing is None
 
-    def _discover_base_models(self) -> int:
+    def _discover_base_models(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> int:
         """Discover local Stable Diffusion base models under `/mnt/c/ai_models`."""
         discovered = 0
 
@@ -226,10 +286,18 @@ class ModelRegistry:
         ]
 
         for model_type, root in roots:
+            if heartbeat is not None:
+                heartbeat()
+            if cancel_check is not None and cancel_check():
+                raise ModelScanCancelledError("Cancelled")
             if not root.exists():
                 continue
 
             for model_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+                if heartbeat is not None:
+                    heartbeat()
+                if cancel_check is not None and cancel_check():
+                    raise ModelScanCancelledError("Cancelled")
                 if not (
                     (model_dir / "model_index.json").exists()
                     or (model_dir / "unet" / "config.json").exists()
@@ -237,7 +305,9 @@ class ModelRegistry:
                     continue
 
                 model_name = f"{model_type}/{model_dir.name}"
-                size_mb = self._calculate_dir_size(model_dir)
+                size_mb = self._calculate_dir_size(
+                    model_dir, cancel_check=cancel_check, heartbeat=heartbeat
+                )
 
                 entry = ModelEntry(
                     name=model_name,
@@ -254,7 +324,12 @@ class ModelRegistry:
 
         return discovered
 
-    def _discover_lora_models(self) -> int:
+    def _discover_lora_models(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> int:
         """Discover LoRA models under `/mnt/c/ai_models/lora*`."""
         discovered = 0
 
@@ -264,10 +339,18 @@ class ModelRegistry:
         ]
 
         for root, prefix, extra_tags in roots:
+            if heartbeat is not None:
+                heartbeat()
+            if cancel_check is not None and cancel_check():
+                raise ModelScanCancelledError("Cancelled")
             if not root.exists():
                 continue
 
             for lora_path in sorted(root.rglob("*.safetensors")):
+                if heartbeat is not None:
+                    heartbeat()
+                if cancel_check is not None and cancel_check():
+                    raise ModelScanCancelledError("Cancelled")
                 model_name = f"{prefix}{lora_path.stem}"
                 size_mb = lora_path.stat().st_size / (1024 * 1024)
 
@@ -286,22 +369,37 @@ class ModelRegistry:
 
         return discovered
 
-    def _discover_controlnet_models(self) -> int:
+    def _discover_controlnet_models(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> int:
         """Discover ControlNet models under `/mnt/c/ai_models/controlnet`."""
         discovered = 0
         root = self.cache_paths.models / "controlnet"
+        if heartbeat is not None:
+            heartbeat()
+        if cancel_check is not None and cancel_check():
+            raise ModelScanCancelledError("Cancelled")
         if not root.exists():
             return 0
 
         # Diffusers-style folders
         for model_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+            if heartbeat is not None:
+                heartbeat()
+            if cancel_check is not None and cancel_check():
+                raise ModelScanCancelledError("Cancelled")
             if not (
                 (model_dir / "config.json").exists()
                 or (model_dir / "model_index.json").exists()
             ):
                 continue
             model_name = f"controlnet/{model_dir.name}"
-            size_mb = self._calculate_dir_size(model_dir)
+            size_mb = self._calculate_dir_size(
+                model_dir, cancel_check=cancel_check, heartbeat=heartbeat
+            )
             entry = ModelEntry(
                 name=model_name,
                 path=str(model_dir),
@@ -316,6 +414,10 @@ class ModelRegistry:
 
         # Single files (best-effort)
         for model_path in sorted(root.rglob("*.safetensors")):
+            if heartbeat is not None:
+                heartbeat()
+            if cancel_check is not None and cancel_check():
+                raise ModelScanCancelledError("Cancelled")
             model_name = f"controlnet/{model_path.stem}"
             size_mb = model_path.stat().st_size / (1024 * 1024)
             entry = ModelEntry(
@@ -332,15 +434,28 @@ class ModelRegistry:
 
         return discovered
 
-    def _discover_embeddings(self) -> int:
+    def _discover_embeddings(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> int:
         """Discover textual inversion embeddings under `/mnt/c/ai_models/embeddings`."""
         embeddings_dir = self.cache_paths.models / "embeddings"
 
+        if heartbeat is not None:
+            heartbeat()
+        if cancel_check is not None and cancel_check():
+            raise ModelScanCancelledError("Cancelled")
         if not embeddings_dir.exists():
             return 0
 
         discovered = 0
         for embed_path in embeddings_dir.rglob("*.pt"):
+            if heartbeat is not None:
+                heartbeat()
+            if cancel_check is not None and cancel_check():
+                raise ModelScanCancelledError("Cancelled")
             model_name = f"embedding/{embed_path.stem}"
             size_mb = embed_path.stat().st_size / (1024 * 1024)
             entry = ModelEntry(
@@ -357,13 +472,26 @@ class ModelRegistry:
 
         return discovered
 
-    def _calculate_dir_size(self, directory: Path) -> float:
+    def _calculate_dir_size(
+        self,
+        directory: Path,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> float:
         """Calculate directory size in MB"""
         try:
-            total_size = sum(
-                f.stat().st_size for f in directory.rglob("*") if f.is_file()
-            )
+            total_size = 0
+            for item in directory.rglob("*"):
+                if heartbeat is not None:
+                    heartbeat()
+                if cancel_check is not None and cancel_check():
+                    raise ModelScanCancelledError("Cancelled")
+                if item.is_file():
+                    total_size += item.stat().st_size
             return total_size / (1024 * 1024)  # Convert to MB
+        except ModelScanCancelledError:
+            raise
         except Exception:
             return 0.0
 
