@@ -405,6 +405,38 @@ async def test_refresh_replay_revokes_subject_sessions(make_app):
 
 
 @pytest.mark.anyio
+async def test_refresh_requires_csrf_when_using_cookie(make_app):
+    app = make_app(
+        API_KEYS="user_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_JWT_ACCESS_TTL_SECONDS="60",
+        API_JWT_REFRESH_TTL_SECONDS="3600",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        issued = await client.post("/api/v1/auth/token", headers={"X-API-Key": "user_key"})
+        assert issued.status_code == 200
+        csrf_cookie = client.cookies.get("cfr_csrf")
+        assert isinstance(csrf_cookie, str) and csrf_cookie
+
+        missing = await client.post("/api/v1/auth/refresh")
+        assert missing.status_code == 403
+        _assert_error_schema(missing)
+        assert missing.json().get("error") == "CSRF_FAILED"
+
+        wrong = await client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": csrf_cookie + "x"})
+        assert wrong.status_code == 403
+        _assert_error_schema(wrong)
+        assert wrong.json().get("error") == "CSRF_FAILED"
+
+        ok = await client.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": csrf_cookie})
+        assert ok.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_revoking_key_revokes_refresh_tokens(make_app):
     app = make_app(
         API_ADMIN_KEYS="admin_key",

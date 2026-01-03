@@ -95,6 +95,23 @@ npm run dev
 - Frontend: set the API key in the header UI (stored in localStorage) instead of baking it into build env vars.
 - Optional JWT: exchange an API key once (`POST /api/v1/auth/token`) then use `Authorization: Bearer ...`; refresh via `POST /api/v1/auth/refresh` (uses HttpOnly refresh cookie + `X-CSRF-Token`).
 - JWT TTL: `API_JWT_ACCESS_TTL_SECONDS` and `API_JWT_REFRESH_TTL_SECONDS`.
+- JWT cookie settings: `API_JWT_REFRESH_COOKIE_NAME`, `API_JWT_CSRF_COOKIE_NAME`, `API_JWT_COOKIE_PATH`, `API_JWT_COOKIE_DOMAIN`, `API_JWT_COOKIE_SAMESITE`, `API_JWT_COOKIE_SECURE`.
+- Refresh replay window: `API_JWT_REFRESH_REPLAY_WINDOW_SECONDS` (keeps rotated refresh tokens briefly to detect replay).
+
+Cookie-jar example:
+```bash
+# Exchange API key for access token + set refresh cookies.
+curl -sS -c cookies.txt http://localhost:8000/api/v1/auth/token -H "X-API-Key: $API_KEY"
+
+# Extract CSRF cookie (curl cookie-jar is Netscape format: name is column 6, value is column 7).
+CSRF="$(awk '$6==\"cfr_csrf\"{print $7}' cookies.txt)"
+
+# Refresh (rotates refresh cookie); requires CSRF header when using cookie auth.
+curl -sS -b cookies.txt -c cookies.txt -X POST http://localhost:8000/api/v1/auth/refresh -H "X-CSRF-Token: $CSRF"
+
+# Logout (clears cookies on the client).
+curl -sS -b cookies.txt -c cookies.txt -X POST http://localhost:8000/api/v1/auth/logout -H "X-CSRF-Token: $CSRF"
+```
 
 ### Managed API Keys (`/api/v1/auth/*`)
 
