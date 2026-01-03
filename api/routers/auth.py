@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from api.jwt_tokens import make_access_token
 from api.key_store import APIKeyStore
 from api.refresh_store import RefreshTokenStore
+from api.security import scope_allows
+from api.ws_tickets import make_ws_ticket
 from core.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -198,6 +200,49 @@ async def me(request: Request) -> Dict[str, Any]:
         "client_key": getattr(request.state, "client_key", None),
         "auth_source": getattr(request.state, "auth_source", "anonymous"),
     }
+
+
+class WSTicketRequest(BaseModel):
+    job_id: str = Field(..., min_length=1, max_length=2000)
+
+
+class WSTicketResponse(BaseModel):
+    job_id: str
+    ws_ticket: str
+    expires_at: int
+
+
+@router.post("/ws_ticket", response_model=WSTicketResponse)
+async def issue_ws_ticket(request: Request, payload: WSTicketRequest) -> WSTicketResponse:
+    """Issue a short-lived WebSocket ticket for training progress streams."""
+
+    role = str(getattr(request.state, "auth_role", "anonymous") or "anonymous")
+    if role == "anonymous":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    scopes = set(getattr(request.state, "auth_scopes", set()) or set())
+    if scopes and not scope_allows(scopes, "train:manage"):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    subject = str(getattr(request.state, "client_key", "") or "")
+    if not subject:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    settings = get_settings()
+    ttl_seconds = int(getattr(settings.api, "ws_ticket_ttl_seconds", 0) or 0)
+    if ttl_seconds <= 0:
+        raise HTTPException(status_code=503, detail="WebSocket tickets are disabled")
+
+    key_id = getattr(request.state, "api_key_id", None)
+    token, expires_at = make_ws_ticket(
+        subject=subject,
+        role=role,
+        scopes=scopes,
+        job_id=str(payload.job_id),
+        key_id=str(key_id) if key_id else None,
+        ttl_seconds=ttl_seconds,
+    )
+    return WSTicketResponse(job_id=str(payload.job_id), ws_ticket=token, expires_at=expires_at)
 
 
 @router.post("/token", response_model=TokenResponse)

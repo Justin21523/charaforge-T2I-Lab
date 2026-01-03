@@ -74,6 +74,8 @@ def _required_scope(path: str, method: str) -> str | None:
         return "models:scan"
     if path.startswith(f"{API_V1_PREFIX}/models/"):
         return "models:read"
+    if path == f"{API_V1_PREFIX}/auth/ws_ticket":
+        return "train:manage"
     if path.startswith(f"{API_V1_PREFIX}/auth/keys"):
         return "auth:manage"
     if path.startswith(f"{API_V1_PREFIX}/t2i/"):
