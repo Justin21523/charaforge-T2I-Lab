@@ -328,3 +328,38 @@ async def test_models_scan_job_can_cancel_while_running(monkeypatch):
 
         missing = await client.get(f"/api/v1/models/scan/status/{job_id}")
         assert missing.status_code == 404
+
+
+def test_models_scan_redis_backend_sets_ttl_for_running_jobs(monkeypatch):
+    import api.model_scan_jobs as scan_jobs
+
+    class FakeRedisClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple] = []
+
+        def set(self, key, value, ex=None, nx=False):  # type: ignore[no-untyped-def]
+            self.calls.append(("set", key, ex, nx))
+            return True
+
+    fake = FakeRedisClient()
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(*args, **kwargs):  # type: ignore[no-untyped-def]
+            return fake
+
+    monkeypatch.setattr(scan_jobs, "redis", FakeRedisModule)
+
+    backend = scan_jobs._RedisBackend(
+        "redis://test",
+        worker_enabled=False,
+        job_ttl_seconds=10,
+    )
+
+    backend._save_job("job_1", {"status": "running"})
+    last_set = next(call for call in reversed(fake.calls) if call[0] == "set")
+    assert last_set[2] == backend._active_ttl_seconds()
+
+    backend._save_job("job_1", {"status": "canceled"})
+    last_set = next(call for call in reversed(fake.calls) if call[0] == "set")
+    assert last_set[2] == 10
