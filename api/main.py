@@ -328,6 +328,21 @@ def create_app() -> FastAPI:
                             "# TYPE charaforge_models_scan_jobs_queue_max gauge\n"
                             "charaforge_models_scan_jobs_queue_max 1\n"
                         )
+                        if hasattr(scan_manager, "completed_counts"):
+                            completed = scan_manager.completed_counts()
+                            succeeded = int(completed.get("succeeded", 0))
+                            failed = int(completed.get("failed", 0))
+                            canceled = int(completed.get("canceled", 0))
+                            body += (
+                                "# HELP charaforge_models_scan_jobs_completed_total Completed model scan jobs.\n"
+                                "# TYPE charaforge_models_scan_jobs_completed_total counter\n"
+                                'charaforge_models_scan_jobs_completed_total{result="succeeded"} '
+                                f"{succeeded}\n"
+                                'charaforge_models_scan_jobs_completed_total{result="failed"} '
+                                f"{failed}\n"
+                                'charaforge_models_scan_jobs_completed_total{result="canceled"} '
+                                f"{canceled}\n"
+                            )
                 except Exception:
                     pass
 
