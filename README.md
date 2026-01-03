@@ -72,7 +72,7 @@ npm run dev
 ## API (Base Prefix: `/api/v1`)
 
 - Health: `GET /api/v1/health`
-- Auth: `GET /api/v1/auth/me`, `POST /api/v1/auth/token`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET|POST /api/v1/auth/keys/*` (admin)
+- Auth: `GET /api/v1/auth/me`, `POST /api/v1/auth/token`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `POST /api/v1/auth/ws_ticket`, `GET|POST /api/v1/auth/keys/*` (admin)
 - T2I: `POST /api/v1/t2i/generate`, `POST /api/v1/t2i/submit`, `GET /api/v1/t2i/status/{job_id}`, `POST /api/v1/t2i/cancel/{job_id}`, `GET /api/v1/t2i/jobs`, `DELETE /api/v1/t2i/jobs/{job_id}`
 - ControlNet: `POST /api/v1/controlnet/{pose|depth|canny|lineart}`
 - LoRA: `GET /api/v1/lora/list`, `POST /api/v1/lora/load`, `POST /api/v1/lora/unload`
@@ -85,7 +85,8 @@ npm run dev
 
 - Set `API_ADMIN_KEYS` and/or `API_KEYS` (comma-separated) to require an API key for `/api/v1/*` (health/readiness/liveness stay open).
 - `/api/v1/models/scan` requires an `admin` key when auth is enabled.
-- For browser WebSockets, pass auth via `Sec-WebSocket-Protocol`: `["charaforge","access_token.<JWT>"]` or `["charaforge","api_key.<KEY>"]` (query params are supported for legacy clients; disable with `API_WS_ALLOW_QUERY_AUTH=false`).
+- For browser WebSockets, prefer a short-lived ticket: `POST /api/v1/auth/ws_ticket` then connect with `Sec-WebSocket-Protocol`: `["charaforge","ws_ticket.<TICKET>"]` (fallback: `access_token.<JWT>` or `api_key.<KEY>`). Query params are legacy; disable with `API_WS_ALLOW_QUERY_AUTH=false`.
+- WebSocket tickets: `API_WS_TICKET_TTL_SECONDS` (0 disables) and `API_WS_TICKET_REPLAY_PROTECTION=true` (single-use via Redis).
 - Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
 - Auth buckets: `API_AUTH_TOKEN_RATE_LIMIT` and `API_AUTH_REFRESH_RATE_LIMIT` (requests/minute, 0 disables).
 - Bucket limits: `API_UPLOAD_RATE_LIMIT` and `API_DATASETS_RATE_LIMIT` (requests/minute, 0 disables).
