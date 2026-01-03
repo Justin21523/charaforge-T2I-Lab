@@ -198,3 +198,26 @@ async def delete_scan_job(job_id: str, request: Request) -> Dict[str, Any]:
         "job_id": job_id,
         "deleted_record": bool(deleted_record),
     }
+
+
+@router.post("/scan/jobs/cleanup")
+async def cleanup_scan_jobs(
+    request: Request,
+    limit: int = 2000,
+    dry_run: bool = True,
+    all: bool = False,
+) -> Dict[str, Any]:
+    manager = _scan_job_manager(request)
+    is_admin = _is_admin(request)
+    if all and not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    owner = None if (all and is_admin) else getattr(request.state, "client_key", "ip:unknown")
+    result = manager.cleanup_jobs(owner=owner, limit=limit, dry_run=dry_run)
+    return {
+        "dry_run": bool(dry_run),
+        "owner": owner,
+        "scanned": int(result.get("scanned", 0)),
+        "stale": int(result.get("stale", 0)),
+        "removed": int(result.get("removed", 0)),
+    }
