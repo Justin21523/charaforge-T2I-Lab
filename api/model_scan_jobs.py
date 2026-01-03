@@ -162,6 +162,29 @@ class _MemoryBackend:
                 self._active_job_id = None
             return existed
 
+    def global_counts(self) -> Dict[str, int]:
+        now = time.time()
+        with self._lock:
+            expired = [job_id for job_id, expiry in self._expires_at.items() if now >= expiry]
+            for job_id in expired:
+                self._expires_at.pop(job_id, None)
+                self._jobs.pop(job_id, None)
+                self._cancel_events.pop(job_id, None)
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+
+            queued = 0
+            running = 0
+            for record in self._jobs.values():
+                status = str(record.get("status") or "")
+                if status == "queued":
+                    queued += 1
+                elif status == "running":
+                    running += 1
+            lease_active = 1 if bool(self._active_job_id) else 0
+
+        return {"queued": queued, "running": running, "lease_active": lease_active}
+
     def cancel(self, job_id: str) -> Optional[CancelResult]:
         with self._lock:
             record = self._jobs.get(job_id)
@@ -436,6 +459,33 @@ class _RedisBackend:
 
         self._release_active_lease(job_id)
         return True
+
+    def global_counts(self) -> Dict[str, int]:
+        try:
+            active_job_id = str(self._client.get(self._active_key()) or "")
+        except Exception:
+            active_job_id = ""
+
+        lease_active = 1 if active_job_id else 0
+        queued = 0
+        running = 0
+
+        if active_job_id:
+            record = self._load_job(active_job_id)
+            if record is not None:
+                status = str(record.get("status") or "")
+                if status == "queued":
+                    queued = 1
+                elif status == "running":
+                    running = 1
+            else:
+                try:
+                    queued = int(self._client.llen(self._queue_key()) or 0)
+                except Exception:
+                    queued = 0
+                running = 0 if queued else 1
+
+        return {"queued": queued, "running": running, "lease_active": lease_active}
 
     def cancel(self, job_id: str) -> Optional[CancelResult]:
         record = self._load_job(job_id)
@@ -715,6 +765,9 @@ class ModelScanJobManager:
 
     def delete_job(self, job_id: str) -> bool:
         return self._backend.delete_job(job_id)
+
+    def global_counts(self) -> Dict[str, int]:
+        return self._backend.global_counts()
 
     def cancel(self, job_id: str) -> CancelResult | None:
         return self._backend.cancel(job_id)
