@@ -1,4 +1,9 @@
+import asyncio
 import os
+import subprocess
+import sys
+import textwrap
+import time
 from pathlib import Path
 
 import httpx
@@ -6,6 +11,7 @@ import pytest
 from httpx import ASGITransport
 
 from api.main import app
+from core.config import get_cache_paths
 
 
 def _touch(path: Path, content: bytes = b"{}") -> None:
@@ -38,3 +44,63 @@ async def test_models_scan_creates_registry_entries():
         assert payload["count"] == 1
         assert payload["models"][0]["name"] == "lora/demo_lora"
 
+
+@pytest.mark.anyio
+async def test_models_scan_returns_409_when_in_progress(tmp_path: Path):
+    lock_path = get_cache_paths().cache / "locks" / "models_scan.lock"
+    ready_path = tmp_path / "scan_lock_ready.txt"
+
+    repo_root = Path(__file__).resolve().parents[1]
+    code = textwrap.dedent(
+        """
+        from pathlib import Path
+        import sys
+        import time
+
+        from core.file_lock import file_lock
+
+        lock_path = Path(sys.argv[1])
+        ready_path = Path(sys.argv[2])
+
+        with file_lock(lock_path, timeout_s=1.0):
+            ready_path.write_text("ready", encoding="utf-8")
+            time.sleep(10)
+        """
+    ).strip()
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code, str(lock_path), str(ready_path)],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    transport = ASGITransport(app=app)
+    try:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if ready_path.exists():
+                break
+            if proc.poll() is not None:
+                stdout, stderr = proc.communicate(timeout=1.0)
+                pytest.fail(
+                    f"Lock holder exited early (code={proc.returncode}).\n"
+                    f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+                )
+            await asyncio.sleep(0.05)
+
+        assert ready_path.exists()
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.post("/api/v1/models/scan", json={"replace": True})
+            assert res.status_code == 409
+            assert "X-Request-ID" in res.headers
+            data = res.json()
+            assert data.get("error") == "SCAN_IN_PROGRESS"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2.0)
