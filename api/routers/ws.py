@@ -11,6 +11,7 @@ Implementation:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -19,6 +20,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api.jwt_tokens import verify_access_token
 from api.security import parse_api_keys, resolve_api_key, scope_allows
+from api.train_access import read_train_access_owner
 from api.ws_tickets import verify_ws_ticket
 from core.config import get_settings
 
@@ -68,6 +70,7 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
     if auth_enabled:
         required_scope = "train:manage"
 
+        subject = ""
         proto_access_token = ""
         proto_api_key = ""
         for proto in protocols:
@@ -98,6 +101,7 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 return
 
             role = str(payload.get("role") or "user")
+            subject = str(payload.get("sub") or "")
             scopes_raw = payload.get("scopes") or []
             if isinstance(scopes_raw, str):
                 scopes_raw = [scopes_raw]
@@ -128,6 +132,7 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 return
 
             role = str(ws_ticket_payload.get("role") or "user")
+            subject = str(ws_ticket_payload.get("sub") or "")
             scopes_raw = ws_ticket_payload.get("scopes") or []
             if isinstance(scopes_raw, str):
                 scopes_raw = [scopes_raw]
@@ -172,7 +177,26 @@ async def ws_train_progress(websocket: WebSocket, job_id: str) -> None:
                 await websocket.close(code=4401)
                 return
 
+            presented_key = str(presented or "")
+            digest = hashlib.sha256(presented_key.encode("utf-8")).hexdigest()[:32]
+            subject = f"key:{digest}"
             if auth.scopes and not scope_allows(auth.scopes, required_scope):
+                if metrics is not None:
+                    try:
+                        metrics.inc_ws_connection(endpoint="train", outcome="forbidden")
+                    except Exception:
+                        pass
+                await websocket.accept(subprotocol=selected_subprotocol)
+                await websocket.send_json({"topic": "ws.error", "message": "Forbidden"})
+                await websocket.close(code=4403)
+                return
+
+            role = str(auth.role or "user")
+            scopes = set(auth.scopes or set())
+
+        if role != "admin":
+            owner = read_train_access_owner(job_id)
+            if not owner or owner != subject:
                 if metrics is not None:
                     try:
                         metrics.inc_ws_connection(endpoint="train", outcome="forbidden")

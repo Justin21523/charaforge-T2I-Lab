@@ -17,6 +17,7 @@ from api.jwt_tokens import make_access_token
 from api.key_store import APIKeyStore
 from api.refresh_store import RefreshTokenStore
 from api.security import scope_allows
+from api.train_access import read_train_access_owner
 from api.ws_tickets import make_ws_ticket
 from core.config import get_settings
 
@@ -233,12 +234,23 @@ async def issue_ws_ticket(request: Request, payload: WSTicketRequest) -> WSTicke
     if ttl_seconds <= 0:
         raise HTTPException(status_code=503, detail="WebSocket tickets are disabled")
 
+    job_id = str(payload.job_id or "").strip()
+    if not job_id:
+        raise HTTPException(status_code=400, detail="job_id is required")
+
+    if role != "admin":
+        owner = read_train_access_owner(job_id)
+        if owner is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if owner != subject:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
     key_id = getattr(request.state, "api_key_id", None)
     token, expires_at = make_ws_ticket(
         subject=subject,
         role=role,
         scopes=scopes,
-        job_id=str(payload.job_id),
+        job_id=job_id,
         key_id=str(key_id) if key_id else None,
         ttl_seconds=ttl_seconds,
     )
