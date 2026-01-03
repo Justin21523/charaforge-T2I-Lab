@@ -162,6 +162,45 @@ class _MemoryBackend:
                 self._active_job_id = None
             return existed
 
+    def cleanup_jobs(
+        self,
+        *,
+        owner: str | None = None,
+        limit: int = 2000,
+        dry_run: bool = True,
+    ) -> Dict[str, int]:
+        limit = max(1, min(int(limit or 2000), 10_000))
+        now = time.time()
+
+        with self._lock:
+            expired = [
+                job_id
+                for job_id, expiry in self._expires_at.items()
+                if expiry is not None and now >= float(expiry)
+            ]
+
+            if owner:
+                expired = [
+                    job_id
+                    for job_id in expired
+                    if str(self._jobs.get(job_id, {}).get("owner") or "") == owner
+                ]
+
+            expired.sort(key=lambda job_id: float(self._expires_at.get(job_id, 0.0)))
+            expired = expired[:limit]
+
+            if dry_run:
+                return {"scanned": len(expired), "stale": len(expired), "removed": 0}
+
+            for job_id in expired:
+                self._expires_at.pop(job_id, None)
+                self._jobs.pop(job_id, None)
+                self._cancel_events.pop(job_id, None)
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+
+        return {"scanned": len(expired), "stale": len(expired), "removed": len(expired)}
+
     def global_counts(self) -> Dict[str, int]:
         now = time.time()
         with self._lock:
@@ -459,6 +498,42 @@ class _RedisBackend:
 
         self._release_active_lease(job_id)
         return True
+
+    def cleanup_jobs(
+        self,
+        *,
+        owner: str | None = None,
+        limit: int = 2000,
+        dry_run: bool = True,
+    ) -> Dict[str, int]:
+        limit = max(1, min(int(limit or 2000), 10_000))
+        key = self._owner_jobs_index_key(owner) if owner else self._jobs_index_key()
+
+        try:
+            job_ids = [str(v) for v in (self._client.zrange(key, 0, limit - 1) or [])]
+        except Exception:
+            job_ids = []
+
+        stale: list[str] = []
+        try:
+            pipe = self._client.pipeline()
+            for job_id in job_ids:
+                pipe.exists(self._job_key(job_id))
+            exists_values = pipe.execute() if job_ids else []
+            for job_id, exists in zip(job_ids, exists_values):
+                if not exists:
+                    stale.append(job_id)
+        except Exception:
+            stale = []
+
+        removed = 0
+        if stale and not dry_run:
+            try:
+                removed = int(self._client.zrem(key, *stale) or 0)
+            except Exception:
+                removed = 0
+
+        return {"scanned": len(job_ids), "stale": len(stale), "removed": removed}
 
     def global_counts(self) -> Dict[str, int]:
         try:
@@ -785,6 +860,15 @@ class ModelScanJobManager:
 
     def delete_job(self, job_id: str) -> bool:
         return self._backend.delete_job(job_id)
+
+    def cleanup_jobs(
+        self,
+        *,
+        owner: str | None = None,
+        limit: int = 2000,
+        dry_run: bool = True,
+    ) -> Dict[str, int]:
+        return self._backend.cleanup_jobs(owner=owner, limit=limit, dry_run=dry_run)
 
     def global_counts(self) -> Dict[str, int]:
         return self._backend.global_counts()
