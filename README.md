@@ -114,6 +114,14 @@ curl -sS -b cookies.txt -c cookies.txt -X POST http://localhost:8000/api/v1/auth
 curl -sS -b cookies.txt -c cookies.txt -X POST http://localhost:8000/api/v1/auth/logout -H "X-CSRF-Token: $CSRF"
 ```
 
+### Reverse Proxy / HTTPS Notes (JWT Cookies)
+
+- In production, set `API_JWT_COOKIE_SECURE=true` (refresh cookies should only be sent over HTTPS).
+- Set `API_JWT_COOKIE_SAMESITE=none` only when the frontend is on a different origin; it requires HTTPS + `API_JWT_COOKIE_SECURE=true` + `API_CORS_ORIGINS` including the exact frontend origin (and `allow_credentials=true` is already enabled).
+- If you run behind Nginx/Caddy/Traefik, run Uvicorn with proxy headers so the app can infer HTTPS correctly:
+  `uvicorn api.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"`
+- Ensure your proxy sets `X-Forwarded-Proto: https` (and `X-Forwarded-For`) to preserve scheme/client IP.
+
 ### Managed API Keys (`/api/v1/auth/*`)
 
 - Managed keys are stored hashed under `$AI_CACHE_ROOT/auth/api_keys.json` and can be created/revoked/rotated by an `admin` key.
