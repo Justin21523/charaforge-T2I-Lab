@@ -9,6 +9,7 @@ import core.config as config
 from api.main import create_app
 from api.t2i_jobs import access_meta_path, read_access_owner
 from api.t2i_tokens import make_image_token
+from api.ws_tickets import verify_ws_ticket
 
 
 def _reset_settings_cache() -> None:
@@ -124,6 +125,89 @@ async def test_auth_token_rate_limit_bucket(make_app):
         _assert_error_schema(limited)
         assert limited.json()["error"] == "RATE_LIMITED"
         assert limited.headers.get("X-RateLimit-Bucket") == "auth_token"
+
+
+@pytest.mark.anyio
+async def test_ws_ticket_requires_auth_and_is_signed(make_app):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_WS_TICKET_TTL_SECONDS="30",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post("/api/v1/auth/ws_ticket", json={"job_id": "job_1"})
+        assert missing.status_code == 401
+        _assert_error_schema(missing)
+
+        issued = await client.post(
+            "/api/v1/auth/ws_ticket",
+            json={"job_id": "job_1"},
+            headers={"X-API-Key": "user_key"},
+        )
+        assert issued.status_code == 200
+        body = issued.json()
+        assert body.get("job_id") == "job_1"
+        assert isinstance(body.get("ws_ticket"), str) and body["ws_ticket"]
+        assert isinstance(body.get("expires_at"), int) and body["expires_at"] > 0
+
+        payload = verify_ws_ticket(body["ws_ticket"])
+        assert payload
+        assert payload.get("job_id") == "job_1"
+        assert payload.get("typ") == "ws_ticket"
+
+
+@pytest.mark.anyio
+async def test_ws_ticket_respects_scope_and_can_be_disabled(make_app):
+    app = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_WS_TICKET_TTL_SECONDS="30",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/v1/auth/keys",
+            json={"role": "user", "scopes": ["datasets:read"], "label": "scoped"},
+            headers={"X-API-Key": "admin_key"},
+        )
+        assert created.status_code == 200
+        scoped_key = created.json()["key"]
+
+        blocked = await client.post(
+            "/api/v1/auth/ws_ticket",
+            json={"job_id": "job_2"},
+            headers={"X-API-Key": scoped_key},
+        )
+        assert blocked.status_code == 403
+        _assert_error_schema(blocked)
+        assert blocked.json()["error"] in {"INSUFFICIENT_SCOPE", "FORBIDDEN"}
+
+    app_disabled = make_app(
+        API_ADMIN_KEYS="admin_key",
+        API_KEYS="user_key",
+        API_RATE_LIMIT="0",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_WS_TICKET_TTL_SECONDS="0",
+    )
+    transport_disabled = ASGITransport(app=app_disabled)
+    async with httpx.AsyncClient(transport=transport_disabled, base_url="http://test") as client:
+        disabled = await client.post(
+            "/api/v1/auth/ws_ticket",
+            json={"job_id": "job_3"},
+            headers={"X-API-Key": "user_key"},
+        )
+        assert disabled.status_code == 503
+        _assert_error_schema(disabled)
 
 
 @pytest.mark.anyio
