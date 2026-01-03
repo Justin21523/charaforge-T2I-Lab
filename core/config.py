@@ -295,6 +295,21 @@ class APIConfig(BaseSettings):
         default=5, ge=0, validation_alias=AliasChoices("SCAN_RATE_LIMIT", "API_SCAN_RATE_LIMIT")
     )
 
+    # Async model scan job settings
+    models_scan_worker_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MODELS_SCAN_WORKER_ENABLED", "API_MODELS_SCAN_WORKER_ENABLED"
+        ),
+    )
+    models_scan_job_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        validation_alias=AliasChoices(
+            "MODELS_SCAN_JOB_TTL_SECONDS", "API_MODELS_SCAN_JOB_TTL_SECONDS"
+        ),
+    )
+
     # Async T2I job settings
     t2i_worker_enabled: bool = Field(
         default=True, validation_alias=AliasChoices("T2I_WORKER_ENABLED", "API_T2I_WORKER_ENABLED")
