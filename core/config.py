@@ -266,6 +266,16 @@ class APIConfig(BaseSettings):
         validation_alias=AliasChoices("JWT_COOKIE_SECURE", "API_JWT_COOKIE_SECURE"),
     )
     rate_limit: int = Field(default=100, ge=0)  # requests per minute (0 disables)
+    auth_token_rate_limit: int = Field(
+        default=10,
+        ge=0,
+        validation_alias=AliasChoices("AUTH_TOKEN_RATE_LIMIT", "API_AUTH_TOKEN_RATE_LIMIT"),
+    )
+    auth_refresh_rate_limit: int = Field(
+        default=30,
+        ge=0,
+        validation_alias=AliasChoices("AUTH_REFRESH_RATE_LIMIT", "API_AUTH_REFRESH_RATE_LIMIT"),
+    )
     scan_rate_limit: int = Field(
         default=5, ge=0, validation_alias=AliasChoices("SCAN_RATE_LIMIT", "API_SCAN_RATE_LIMIT")
     )

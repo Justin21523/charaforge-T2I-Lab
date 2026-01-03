@@ -309,6 +309,8 @@ def create_app() -> FastAPI:
             f"{API_V1_PREFIX}/auth/logout",
         }
 
+        is_auth_token_request = path == f"{API_V1_PREFIX}/auth/token"
+        is_auth_refresh_request = path == f"{API_V1_PREFIX}/auth/refresh"
         is_scan_request = path == f"{API_V1_PREFIX}/models/scan"
         is_t2i_image_request = path.startswith(f"{API_V1_PREFIX}/t2i/images/")
         is_controlnet_image_request = path.startswith(f"{API_V1_PREFIX}/controlnet/images/")
@@ -389,7 +391,13 @@ def create_app() -> FastAPI:
 
         special_bucket = None
         special_limit = 0
-        if is_scan_request:
+        if is_auth_token_request:
+            special_bucket = "auth_token"
+            special_limit = int(settings.api.auth_token_rate_limit or 0)
+        elif is_auth_refresh_request:
+            special_bucket = "auth_refresh"
+            special_limit = int(settings.api.auth_refresh_rate_limit or 0)
+        elif is_scan_request:
             special_bucket = "models_scan"
             special_limit = int(settings.api.scan_rate_limit or 0)
         elif path.startswith(f"{API_V1_PREFIX}/upload"):

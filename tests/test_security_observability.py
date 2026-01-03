@@ -103,6 +103,30 @@ async def test_error_schema_and_request_id_for_429(make_app):
 
 
 @pytest.mark.anyio
+async def test_auth_token_rate_limit_bucket(make_app):
+    app = make_app(
+        API_KEYS="user_key",
+        API_RATE_LIMIT="0",
+        API_AUTH_TOKEN_RATE_LIMIT="1",
+        API_SCAN_RATE_LIMIT="0",
+        API_T2I_WORKER_ENABLED="false",
+        JWT_SECRET="test-signing-secret",
+        API_JWT_ACCESS_TTL_SECONDS="60",
+        API_JWT_REFRESH_TTL_SECONDS="3600",
+    )
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        ok = await client.post("/api/v1/auth/token", headers={"X-API-Key": "user_key"})
+        assert ok.status_code == 200
+
+        limited = await client.post("/api/v1/auth/token", headers={"X-API-Key": "user_key"})
+        assert limited.status_code == 429
+        _assert_error_schema(limited)
+        assert limited.json()["error"] == "RATE_LIMITED"
+        assert limited.headers.get("X-RateLimit-Bucket") == "auth_token"
+
+
+@pytest.mark.anyio
 async def test_t2i_status_is_owner_only_and_images_accept_token(make_app, tmp_path):
     app = make_app(
         API_ADMIN_KEYS="admin_key",

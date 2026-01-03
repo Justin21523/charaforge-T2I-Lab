@@ -87,6 +87,7 @@ npm run dev
 - `/api/v1/models/scan` requires an `admin` key when auth is enabled.
 - For browser WebSockets, pass auth via `Sec-WebSocket-Protocol`: `["charaforge","access_token.<JWT>"]` or `["charaforge","api_key.<KEY>"]` (query params are still supported for legacy clients).
 - Set `API_RATE_LIMIT` for global RPM and `API_SCAN_RATE_LIMIT` for `/api/v1/models/scan` (0 disables).
+- Auth buckets: `API_AUTH_TOKEN_RATE_LIMIT` and `API_AUTH_REFRESH_RATE_LIMIT` (requests/minute, 0 disables).
 - Bucket limits: `API_UPLOAD_RATE_LIMIT` and `API_DATASETS_RATE_LIMIT` (requests/minute, 0 disables).
 - Cost-based throttles: `API_T2I_COST_RATE_LIMIT` (cost units/minute, 0 disables).
 - Output cleanup: `API_T2I_OUTPUT_TTL_SECONDS` (seconds, 0 disables), plus `POST /api/v1/t2i/jobs/cleanup`.
