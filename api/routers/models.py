@@ -148,3 +148,53 @@ async def cancel_scan(job_id: str, request: Request) -> Dict[str, Any]:
     if result is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return result.snapshot
+
+
+@router.get("/scan/jobs")
+async def list_scan_jobs(
+    request: Request,
+    limit: int = 50,
+    status: str | None = None,
+    all: bool = False,
+) -> Dict[str, Any]:
+    manager = _scan_job_manager(request)
+    is_admin = _is_admin(request)
+    if all and not is_admin:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    owner = None if (all and is_admin) else getattr(request.state, "client_key", "ip:unknown")
+    jobs = manager.list_jobs(owner=owner, limit=limit, status=status)
+    if not is_admin:
+        for job in jobs:
+            job.pop("owner", None)
+    return {"count": len(jobs), "jobs": jobs}
+
+
+@router.delete("/scan/jobs/{job_id}")
+async def delete_scan_job(job_id: str, request: Request) -> Dict[str, Any]:
+    manager = _scan_job_manager(request)
+    _require_job_access(request, manager, job_id)
+
+    snapshot = manager.get(job_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    status = str(snapshot.get("status") or "")
+    if status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "MODELS_SCAN_JOB_RUNNING",
+                "message": "Job is running; cancel first",
+            },
+        )
+
+    if status == "queued":
+        manager.cancel(job_id)
+
+    deleted_record = manager.delete_job(job_id)
+    return {
+        "status": "deleted",
+        "job_id": job_id,
+        "deleted_record": bool(deleted_record),
+    }
