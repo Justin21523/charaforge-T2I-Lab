@@ -124,6 +124,44 @@ class _MemoryBackend:
             owner = record.get("owner") if record else None
         return str(owner) if owner else None
 
+    def list_jobs(
+        self, *, owner: str | None = None, limit: int = 50, status: str | None = None
+    ) -> list[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 200))
+        now = time.time()
+
+        with self._lock:
+            expired = [job_id for job_id, expiry in self._expires_at.items() if now >= expiry]
+            for job_id in expired:
+                self._expires_at.pop(job_id, None)
+                self._jobs.pop(job_id, None)
+                self._cancel_events.pop(job_id, None)
+                if self._active_job_id == job_id:
+                    self._active_job_id = None
+
+            records = list(self._jobs.values())
+
+        if owner:
+            records = [r for r in records if str(r.get("owner") or "") == owner]
+        if status:
+            records = [r for r in records if str(r.get("status") or "") == status]
+
+        records.sort(key=lambda r: float(r.get("created_at") or 0.0), reverse=True)
+        return [_snapshot_from_record(r) for r in records[:limit]]
+
+    def delete_job(self, job_id: str) -> bool:
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return False
+        with self._lock:
+            existed = job_id in self._jobs
+            self._jobs.pop(job_id, None)
+            self._expires_at.pop(job_id, None)
+            self._cancel_events.pop(job_id, None)
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+            return existed
+
     def cancel(self, job_id: str) -> Optional[CancelResult]:
         with self._lock:
             record = self._jobs.get(job_id)
@@ -327,6 +365,8 @@ class _RedisBackend:
         else:
             pipe.set(self._job_key(job_id), payload)
         pipe.rpush(self._queue_key(), job_id)
+        pipe.zadd(self._jobs_index_key(), {job_id: now})
+        pipe.zadd(self._owner_jobs_index_key(owner), {job_id: now})
         pipe.execute()
 
         return job_id, True
@@ -339,6 +379,63 @@ class _RedisBackend:
         record = self._load_job(job_id)
         owner = record.get("owner") if record else None
         return str(owner) if owner else None
+
+    def list_jobs(
+        self, *, owner: str | None = None, limit: int = 50, status: str | None = None
+    ) -> list[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 200))
+        key = self._owner_jobs_index_key(owner) if owner else self._jobs_index_key()
+
+        fetch = min(1000, max(limit * 5, limit))
+        try:
+            job_ids = [str(v) for v in (self._client.zrevrange(key, 0, fetch - 1) or [])]
+        except Exception:
+            job_ids = []
+
+        out: list[Dict[str, Any]] = []
+        stale: list[str] = []
+        for job_id in job_ids:
+            record = self._load_job(job_id)
+            if record is None:
+                stale.append(job_id)
+                continue
+            snap = _snapshot_from_record(record)
+            if status and str(snap.get("status") or "") != status:
+                continue
+            out.append(snap)
+            if len(out) >= limit:
+                break
+
+        if stale:
+            try:
+                self._client.zrem(key, *stale)
+            except Exception:
+                pass
+
+        return out
+
+    def delete_job(self, job_id: str) -> bool:
+        job_id = str(job_id or "").strip()
+        if not job_id:
+            return False
+
+        record = self._load_job(job_id) or {}
+        owner = str(record.get("owner") or "")
+
+        try:
+            pipe = self._client.pipeline()
+            pipe.delete(self._job_key(job_id))
+            pipe.delete(self._cancel_key(job_id))
+            pipe.lrem(self._queue_key(), 0, job_id)
+            pipe.zrem(self._jobs_index_key(), job_id)
+            if owner:
+                pipe.zrem(self._owner_jobs_index_key(owner), job_id)
+            pipe.execute()
+        except Exception:
+            return False
+
+        self._release_active_lease(job_id)
+        return True
 
     def cancel(self, job_id: str) -> Optional[CancelResult]:
         record = self._load_job(job_id)
@@ -378,6 +475,12 @@ class _RedisBackend:
 
     def _job_key(self, job_id: str) -> str:
         return f"{self._namespace}:job:{job_id}"
+
+    def _jobs_index_key(self) -> str:
+        return f"{self._namespace}:jobs"
+
+    def _owner_jobs_index_key(self, owner: str | None) -> str:
+        return f"{self._namespace}:owner:{owner}:jobs"
 
     def _release_active_lease(self, job_id: str) -> None:
         try:
@@ -604,6 +707,14 @@ class ModelScanJobManager:
 
     def get_owner(self, job_id: str) -> str | None:
         return self._backend.get_owner(job_id)
+
+    def list_jobs(
+        self, *, owner: str | None = None, limit: int = 50, status: str | None = None
+    ) -> list[Dict[str, Any]]:
+        return self._backend.list_jobs(owner=owner, limit=limit, status=status)
+
+    def delete_job(self, job_id: str) -> bool:
+        return self._backend.delete_job(job_id)
 
     def cancel(self, job_id: str) -> CancelResult | None:
         return self._backend.cancel(job_id)
