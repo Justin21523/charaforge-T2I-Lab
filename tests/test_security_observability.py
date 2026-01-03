@@ -90,6 +90,27 @@ async def test_models_scan_requires_admin_key(make_app):
 
 
 @pytest.mark.anyio
+async def test_models_scan_submit_requires_admin_key(make_app):
+    app = make_app(API_ADMIN_KEYS="admin_key", API_KEYS="user_key", API_RATE_LIMIT="0", API_SCAN_RATE_LIMIT="0")
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        res_user = await client.post(
+            "/api/v1/models/scan/submit",
+            json={"replace": True},
+            headers={"X-API-Key": "user_key"},
+        )
+        assert res_user.status_code == 403
+        _assert_error_schema(res_user)
+
+        res_admin = await client.post(
+            "/api/v1/models/scan/submit",
+            json={"replace": True},
+            headers={"X-API-Key": "admin_key"},
+        )
+        assert res_admin.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_error_schema_and_request_id_for_429(make_app):
     app = make_app(API_RATE_LIMIT="1", API_SCAN_RATE_LIMIT="0")
     transport = ASGITransport(app=app)
