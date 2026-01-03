@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+COMPLETION_RESULTS: tuple[str, ...] = ("succeeded", "failed", "canceled")
 
 
 def _snapshot_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -59,6 +60,7 @@ class _MemoryBackend:
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
+        self._completed_totals: Dict[str, int] = {key: 0 for key in COMPLETION_RESULTS}
 
     def start(self) -> None:
         if not self._worker_enabled:
@@ -224,6 +226,10 @@ class _MemoryBackend:
 
         return {"queued": queued, "running": running, "lease_active": lease_active}
 
+    def completed_counts(self) -> Dict[str, int]:
+        with self._lock:
+            return dict(self._completed_totals)
+
     def cancel(self, job_id: str) -> Optional[CancelResult]:
         with self._lock:
             record = self._jobs.get(job_id)
@@ -246,6 +252,7 @@ class _MemoryBackend:
             record["status"] = "canceled"
             record["finished_at"] = time.time()
             record["error"] = {"error": "CANCELED", "message": "Canceled"}
+            self._completed_totals["canceled"] += 1
             if self._active_job_id == job_id:
                 self._active_job_id = None
             self._apply_ttl_locked(job_id, record)
@@ -277,6 +284,7 @@ class _MemoryBackend:
                     record["finished_at"] = time.time()
                     record["updated_at"] = time.time()
                     record["error"] = {"error": "CANCELED", "message": "Canceled"}
+                    self._completed_totals["canceled"] += 1
                     self._apply_ttl_locked(job_id, record)
                     if self._active_job_id == job_id:
                         self._active_job_id = None
@@ -315,6 +323,7 @@ class _MemoryBackend:
                     record["finished_at"] = time.time()
                     record["updated_at"] = time.time()
                     record["result"] = result
+                    self._completed_totals["succeeded"] += 1
                     self._apply_ttl_locked(job_id, record)
                     if self._active_job_id == job_id:
                         self._active_job_id = None
@@ -328,6 +337,7 @@ class _MemoryBackend:
                     record["updated_at"] = time.time()
                     record["cancel_requested"] = True
                     record["error"] = {"error": "CANCELED", "message": "Canceled"}
+                    self._completed_totals["canceled"] += 1
                     self._apply_ttl_locked(job_id, record)
                     if self._active_job_id == job_id:
                         self._active_job_id = None
@@ -340,6 +350,7 @@ class _MemoryBackend:
                     record["finished_at"] = time.time()
                     record["updated_at"] = time.time()
                     record["error"] = {"error": "FAILED", "message": str(exc)}
+                    self._completed_totals["failed"] += 1
                     self._apply_ttl_locked(job_id, record)
                     if self._active_job_id == job_id:
                         self._active_job_id = None
@@ -562,6 +573,21 @@ class _RedisBackend:
 
         return {"queued": queued, "running": running, "lease_active": lease_active}
 
+    def completed_counts(self) -> Dict[str, int]:
+        keys = [self._completed_total_key(result) for result in COMPLETION_RESULTS]
+        try:
+            values = self._client.mget(keys)
+        except Exception:
+            values = [None] * len(keys)
+
+        out: Dict[str, int] = {}
+        for result, raw in zip(COMPLETION_RESULTS, values):
+            try:
+                out[str(result)] = int(raw or 0)
+            except Exception:
+                out[str(result)] = 0
+        return out
+
     def cancel(self, job_id: str) -> Optional[CancelResult]:
         record = self._load_job(job_id)
         if record is None:
@@ -587,6 +613,7 @@ class _RedisBackend:
         pipe.execute()
         self._release_active_lease(job_id)
         self._save_job(job_id, record)
+        self._count_completion(job_id, "canceled")
         return CancelResult(snapshot=_snapshot_from_record(record), canceled=True)
 
     def _active_key(self) -> str:
@@ -606,6 +633,35 @@ class _RedisBackend:
 
     def _owner_jobs_index_key(self, owner: str | None) -> str:
         return f"{self._namespace}:owner:{owner}:jobs"
+
+    def _completed_total_key(self, result: str) -> str:
+        return f"{self._namespace}:metrics:completed_total:{result}"
+
+    def _completion_counted_key(self, job_id: str) -> str:
+        return f"{self._namespace}:metrics:counted:{job_id}"
+
+    def _count_completion(self, job_id: str, status: str) -> None:
+        status = str(status or "")
+        if status not in COMPLETION_RESULTS:
+            return
+
+        ttl_seconds = int(self._active_ttl_seconds() or 0)
+        ttl_seconds = max(ttl_seconds, 60)
+        counted_key = self._completion_counted_key(job_id)
+        counter_key = self._completed_total_key(status)
+
+        try:
+            claimed = self._client.set(counted_key, "1", ex=ttl_seconds, nx=True)
+        except Exception:
+            return
+
+        if not claimed:
+            return
+
+        try:
+            self._client.incr(counter_key)
+        except Exception:
+            return
 
     def _release_active_lease(self, job_id: str) -> None:
         try:
@@ -713,6 +769,7 @@ class _RedisBackend:
                 record["updated_at"] = time.time()
                 record["error"] = {"error": "CANCELED", "message": "Canceled"}
                 self._save_job(job_id, record)
+                self._count_completion(job_id, "canceled")
                 self._release_active_lease(job_id)
                 continue
 
@@ -774,6 +831,7 @@ class _RedisBackend:
                 record["updated_at"] = time.time()
                 record["result"] = result
                 self._save_job(job_id, record)
+                self._count_completion(job_id, "succeeded")
                 try:
                     self._client.delete(self._cancel_key(job_id))
                 except Exception:
@@ -787,6 +845,7 @@ class _RedisBackend:
                 record["cancel_requested"] = True
                 record["error"] = {"error": "CANCELED", "message": "Canceled"}
                 self._save_job(job_id, record)
+                self._count_completion(job_id, "canceled")
                 try:
                     self._client.delete(self._cancel_key(job_id))
                 except Exception:
@@ -799,6 +858,7 @@ class _RedisBackend:
                 record["updated_at"] = time.time()
                 record["error"] = {"error": "FAILED", "message": str(exc)}
                 self._save_job(job_id, record)
+                self._count_completion(job_id, "failed")
                 try:
                     self._client.delete(self._cancel_key(job_id))
                 except Exception:
@@ -872,6 +932,11 @@ class ModelScanJobManager:
 
     def global_counts(self) -> Dict[str, int]:
         return self._backend.global_counts()
+
+    def completed_counts(self) -> Dict[str, int]:
+        if hasattr(self._backend, "completed_counts"):
+            return self._backend.completed_counts()
+        return {key: 0 for key in COMPLETION_RESULTS}
 
     def cancel(self, job_id: str) -> CancelResult | None:
         return self._backend.cancel(job_id)
