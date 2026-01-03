@@ -96,19 +96,35 @@ const TrainingMonitor = () => {
   );
 
   const wsProtocols = useCallback(() => {
-    const protocols = ["charaforge"];
-    const now = Math.floor(Date.now() / 1000);
-    const jwtInfo = apiService.getJwtInfo();
-    if (apiService.getUseJwt() && jwtInfo?.accessToken && jwtInfo?.expiresAt > now + 10) {
-      protocols.push(`access_token.${jwtInfo.accessToken}`);
+    const getFallbackProtocols = () => {
+      const protocols = ["charaforge"];
+      const now = Math.floor(Date.now() / 1000);
+      const jwtInfo = apiService.getJwtInfo();
+      if (apiService.getUseJwt() && jwtInfo?.accessToken && jwtInfo?.expiresAt > now + 10) {
+        protocols.push(`access_token.${jwtInfo.accessToken}`);
+        return protocols;
+      }
+      const apiKey = apiService.getApiKey();
+      if (apiKey) {
+        protocols.push(`api_key.${apiKey}`);
+      }
       return protocols;
-    }
-    const apiKey = apiService.getApiKey();
-    if (apiKey) {
-      protocols.push(`api_key.${apiKey}`);
-    }
-    return protocols;
-  }, [apiService]);
+    };
+
+    return (async () => {
+      const protocols = ["charaforge"];
+      try {
+        const ticket = await apiService.issueTrainingWsTicket(selectedJobId);
+        if (ticket?.ws_ticket) {
+          protocols.push(`ws_ticket.${ticket.ws_ticket}`);
+          return protocols;
+        }
+      } catch (error) {
+        // ignore and fall back
+      }
+      return getFallbackProtocols();
+    })();
+  }, [apiService, selectedJobId]);
 
   const { status: wsStatus, lastMessage: wsMessage } = useWebSocket(wsUrl, {
     enabled: Boolean(selectedJobId),

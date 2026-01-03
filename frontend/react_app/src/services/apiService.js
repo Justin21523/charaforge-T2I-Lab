@@ -532,6 +532,10 @@ class APIService {
     return await this.client.get("/api/v1/auth/me");
   }
 
+  async issueTrainingWsTicket(jobId) {
+    return await this.client.post("/api/v1/auth/ws_ticket", { job_id: String(jobId || "") });
+  }
+
   // File upload
   async uploadFile(file, fileType = "image") {
     const formData = new FormData();

@@ -55,43 +55,56 @@ export const useWebSocket = (
     if (!enabled || !url) return () => {};
 
     let cancelled = false;
+    let connectAttempt = 0;
 
     const connect = () => {
       if (cancelled) return;
+      connectAttempt += 1;
+      const attemptId = connectAttempt;
       disconnect();
       setStatus("connecting");
 
-      const selectedProtocols =
-        typeof protocols === "function" ? protocols() : protocols;
-      const ws = selectedProtocols ? new WebSocket(url, selectedProtocols) : new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (cancelled) return;
-        setStatus("connected");
-      };
-
-      ws.onmessage = (event) => {
-        if (cancelled) return;
+      (async () => {
+        let selectedProtocols = null;
         try {
-          setLastMessage(JSON.parse(event.data));
+          selectedProtocols = typeof protocols === "function" ? protocols() : protocols;
+          selectedProtocols = await Promise.resolve(selectedProtocols);
         } catch (e) {
-          setLastMessage({ topic: "ws.message", data: event.data });
+          selectedProtocols = null;
         }
-      };
 
-      ws.onerror = () => {
-        if (cancelled) return;
-        setStatus("error");
-      };
+        if (cancelled || attemptId !== connectAttempt) return;
 
-      ws.onclose = () => {
-        if (cancelled) return;
-        setStatus("disconnected");
-        if (reconnect) {
-          reconnectTimerRef.current = setTimeout(connect, reconnectDelayMs);
-        }
-      };
+        const ws = selectedProtocols ? new WebSocket(url, selectedProtocols) : new WebSocket(url);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          if (cancelled) return;
+          setStatus("connected");
+        };
+
+        ws.onmessage = (event) => {
+          if (cancelled) return;
+          try {
+            setLastMessage(JSON.parse(event.data));
+          } catch (e) {
+            setLastMessage({ topic: "ws.message", data: event.data });
+          }
+        };
+
+        ws.onerror = () => {
+          if (cancelled) return;
+          setStatus("error");
+        };
+
+        ws.onclose = () => {
+          if (cancelled) return;
+          setStatus("disconnected");
+          if (reconnect) {
+            reconnectTimerRef.current = setTimeout(connect, reconnectDelayMs);
+          }
+        };
+      })();
     };
 
     connect();
