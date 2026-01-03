@@ -303,6 +303,21 @@ def create_app() -> FastAPI:
                             "# TYPE charaforge_t2i_gpu_slots_total gauge\n"
                             f"charaforge_t2i_gpu_slots_total {total}\n"
                         )
+                    if manager is not None and hasattr(manager, "completed_counts"):
+                        completed = manager.completed_counts()
+                        succeeded = int(completed.get("succeeded", 0))
+                        failed = int(completed.get("failed", 0))
+                        canceled = int(completed.get("canceled", 0))
+                        body += (
+                            "# HELP charaforge_t2i_jobs_completed_total Completed T2I jobs.\n"
+                            "# TYPE charaforge_t2i_jobs_completed_total counter\n"
+                            'charaforge_t2i_jobs_completed_total{result="succeeded"} '
+                            f"{succeeded}\n"
+                            'charaforge_t2i_jobs_completed_total{result="failed"} '
+                            f"{failed}\n"
+                            'charaforge_t2i_jobs_completed_total{result="canceled"} '
+                            f"{canceled}\n"
+                        )
 
                     scan_manager = getattr(request.app.state, "model_scan_job_manager", None)
                     if scan_manager is not None and hasattr(scan_manager, "global_counts"):
