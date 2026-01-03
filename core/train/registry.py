@@ -3,14 +3,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.config import get_cache_paths
+from core.file_lock import file_lock
 
 logger = logging.getLogger(__name__)
+
+REGISTRY_WRITE_LOCK_TIMEOUT_SECONDS = 5.0
+SCAN_LOCK_TIMEOUT_SECONDS = 0.0
 
 
 @dataclass
@@ -53,6 +59,7 @@ class ModelRegistry:
         self.cache_paths = get_cache_paths()
         self.registry_path = self.cache_paths.models / "registry.json"
         self.presets_path = self.cache_paths.models / "presets.json"
+        self._lock = threading.RLock()
 
         # Initialize registry data
         self.models: Dict[str, ModelEntry] = {}
@@ -89,39 +96,53 @@ class ModelRegistry:
         except Exception as e:
             logger.warning(f"Error loading registries: {e}")
 
+    def _locks_dir(self) -> Path:
+        return self.cache_paths.cache / "locks"
+
+    def _scan_lock_path(self) -> Path:
+        return self._locks_dir() / "models_scan.lock"
+
+    def _write_lock_path(self) -> Path:
+        return self._locks_dir() / "model_registry_write.lock"
+
+    def _atomic_write_json(self, path: Path, payload: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+        tmp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+
     def _save_registries(self):
         """Save registries to disk"""
         try:
-            # Save models registry
-            self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.registry_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "models": {
-                            name: model.to_dict() for name, model in self.models.items()
-                        },
-                        "last_updated": datetime.now().isoformat(),
-                    },
-                    f,
-                    indent=2,
-                    ensure_ascii=False,
-                )
+            with self._lock:
+                models_payload = {
+                    name: model.to_dict() for name, model in self.models.items()
+                }
+                presets_payload = {
+                    name: preset.to_dict() for name, preset in self.presets.items()
+                }
 
-            # Save presets registry
-            with open(self.presets_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "presets": {
-                            name: preset.to_dict()
-                            for name, preset in self.presets.items()
+                with file_lock(
+                    self._write_lock_path(),
+                    timeout_s=REGISTRY_WRITE_LOCK_TIMEOUT_SECONDS,
+                ):
+                    self._atomic_write_json(
+                        self.registry_path,
+                        {
+                            "models": models_payload,
+                            "last_updated": datetime.now().isoformat(),
                         },
-                        "last_updated": datetime.now().isoformat(),
-                    },
-                    f,
-                    indent=2,
-                    ensure_ascii=False,
-                )
-
+                    )
+                    self._atomic_write_json(
+                        self.presets_path,
+                        {
+                            "presets": presets_payload,
+                            "last_updated": datetime.now().isoformat(),
+                        },
+                    )
         except Exception as e:
             logger.error(f"Error saving registries: {e}")
 
@@ -131,55 +152,69 @@ class ModelRegistry:
         Args:
             replace: When True, rebuild the registry from disk (keeps presets).
         """
-        before = len(self.models)
+        try:
+            with self._lock:
+                with file_lock(
+                    self._scan_lock_path(), timeout_s=SCAN_LOCK_TIMEOUT_SECONDS
+                ):
+                    before = len(self.models)
 
-        existing_usage = {
-            name: (entry.created_at, entry.last_used)
-            for name, entry in self.models.items()
-        }
+                    existing_usage = {
+                        name: (entry.created_at, entry.last_used)
+                        for name, entry in self.models.items()
+                    }
 
-        if replace:
-            self.models = {}
+                    if replace:
+                        self.models = {}
 
-        added = 0
-        added += self._discover_base_models()
-        added += self._discover_controlnet_models()
-        added += self._discover_lora_models()
-        added += self._discover_embeddings()
+                    added = 0
+                    added += self._discover_base_models()
+                    added += self._discover_controlnet_models()
+                    added += self._discover_lora_models()
+                    added += self._discover_embeddings()
 
-        # Preserve usage timestamps for unchanged model ids.
-        for name, entry in self.models.items():
-            created_at, last_used = existing_usage.get(name, (None, None))
-            if created_at and not entry.created_at:
-                entry.created_at = created_at
-            if last_used and not entry.last_used:
-                entry.last_used = last_used
+                    # Preserve usage timestamps for unchanged model ids.
+                    for name, entry in self.models.items():
+                        created_at, last_used = existing_usage.get(name, (None, None))
+                        if created_at and not entry.created_at:
+                            entry.created_at = created_at
+                        if last_used and not entry.last_used:
+                            entry.last_used = last_used
 
-        self._save_registries()
+                    self._save_registries()
 
-        return {
-            "status": "ok",
-            "replace": bool(replace),
-            "models_before": before,
-            "models_after": len(self.models),
-            "models_added": added,
-            "registry_path": str(self.registry_path),
-            "updated_at": datetime.now().isoformat(),
-        }
+                    return {
+                        "status": "ok",
+                        "replace": bool(replace),
+                        "models_before": before,
+                        "models_after": len(self.models),
+                        "models_added": added,
+                        "registry_path": str(self.registry_path),
+                        "updated_at": datetime.now().isoformat(),
+                    }
+        except TimeoutError:
+            return {
+                "status": "busy",
+                "error": "SCAN_IN_PROGRESS",
+                "message": "Model scan already in progress",
+                "registry_path": str(self.registry_path),
+                "updated_at": datetime.now().isoformat(),
+            }
 
     # Backwards compatible alias.
     def auto_discover_models(self) -> None:
         self.scan_filesystem(replace=False)
 
     def _upsert_model(self, entry: ModelEntry) -> bool:
-        existing = self.models.get(entry.name)
-        if existing:
-            # Preserve human-meaningful timestamps from the registry.
-            entry.created_at = existing.created_at or entry.created_at
-            entry.last_used = existing.last_used or entry.last_used
-            entry.metadata = existing.metadata or entry.metadata
-        self.models[entry.name] = entry
-        return existing is None
+        with self._lock:
+            existing = self.models.get(entry.name)
+            if existing:
+                # Preserve human-meaningful timestamps from the registry.
+                entry.created_at = existing.created_at or entry.created_at
+                entry.last_used = existing.last_used or entry.last_used
+                entry.metadata = existing.metadata or entry.metadata
+            self.models[entry.name] = entry
+            return existing is None
 
     def _discover_base_models(self) -> int:
         """Discover local Stable Diffusion base models under `/mnt/c/ai_models`."""
@@ -336,7 +371,8 @@ class ModelRegistry:
     def register_model(self, entry: ModelEntry) -> bool:
         """Register a new model"""
         try:
-            self.models[entry.name] = entry
+            with self._lock:
+                self.models[entry.name] = entry
             self._save_registries()
             logger.info(f"Registered model: {entry.name}")
             return True
@@ -366,24 +402,28 @@ class ModelRegistry:
 
     def update_model_usage(self, name: str):
         """Update last used timestamp for a model"""
-        if name in self.models:
+        with self._lock:
+            if name not in self.models:
+                return
             self.models[name].last_used = datetime.now().isoformat()
-            self._save_registries()
+        self._save_registries()
 
     def remove_model(self, name: str) -> bool:
         """Remove model from registry"""
-        if name in self.models:
+        with self._lock:
+            if name not in self.models:
+                return False
             del self.models[name]
             self._save_registries()
             logger.info(f"Removed model: {name}")
             return True
-        return False
 
     # Training preset methods
     def register_preset(self, preset: TrainingPreset) -> bool:
         """Register a training preset"""
         try:
-            self.presets[preset.name] = preset
+            with self._lock:
+                self.presets[preset.name] = preset
             self._save_registries()
             logger.info(f"Registered preset: {preset.name}")
             return True
@@ -465,8 +505,9 @@ class ModelRegistry:
         ]
 
         for preset in default_presets:
-            if preset.name not in self.presets:
-                self.presets[preset.name] = preset
+            with self._lock:
+                if preset.name not in self.presets:
+                    self.presets[preset.name] = preset
 
         self._save_registries()
         logger.info(f"Loaded {len(default_presets)} default presets")
