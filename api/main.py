@@ -303,6 +303,31 @@ def create_app() -> FastAPI:
                             "# TYPE charaforge_t2i_gpu_slots_total gauge\n"
                             f"charaforge_t2i_gpu_slots_total {total}\n"
                         )
+
+                    scan_manager = getattr(request.app.state, "model_scan_job_manager", None)
+                    if scan_manager is not None and hasattr(scan_manager, "global_counts"):
+                        scan_counts = scan_manager.global_counts()
+                        scan_queued = int(scan_counts.get("queued", 0))
+                        scan_running = int(scan_counts.get("running", 0))
+                        scan_active = scan_queued + scan_running
+                        scan_lease = int(scan_counts.get("lease_active", 0))
+                        body += (
+                            "# HELP charaforge_models_scan_jobs_queued Queued model scan jobs.\n"
+                            "# TYPE charaforge_models_scan_jobs_queued gauge\n"
+                            f"charaforge_models_scan_jobs_queued {scan_queued}\n"
+                            "# HELP charaforge_models_scan_jobs_running Running model scan jobs.\n"
+                            "# TYPE charaforge_models_scan_jobs_running gauge\n"
+                            f"charaforge_models_scan_jobs_running {scan_running}\n"
+                            "# HELP charaforge_models_scan_jobs_active Active (queued+running) model scan jobs.\n"
+                            "# TYPE charaforge_models_scan_jobs_active gauge\n"
+                            f"charaforge_models_scan_jobs_active {scan_active}\n"
+                            "# HELP charaforge_models_scan_active_lease_present Active scan lease present.\n"
+                            "# TYPE charaforge_models_scan_active_lease_present gauge\n"
+                            f"charaforge_models_scan_active_lease_present {scan_lease}\n"
+                            "# HELP charaforge_models_scan_jobs_queue_max Max allowed active scan jobs.\n"
+                            "# TYPE charaforge_models_scan_jobs_queue_max gauge\n"
+                            "charaforge_models_scan_jobs_queue_max 1\n"
+                        )
                 except Exception:
                     pass
 
