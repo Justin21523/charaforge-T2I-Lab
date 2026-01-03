@@ -496,7 +496,7 @@ class _RedisBackend:
         record["cancel_requested"] = True
         record["updated_at"] = time.time()
         try:
-            self._client.set(self._cancel_key(job_id), "1", ex=max(self._job_ttl_seconds, 300))
+            self._client.set(self._cancel_key(job_id), "1", ex=self._active_ttl_seconds())
         except Exception:
             pass
 
@@ -560,6 +560,24 @@ class _RedisBackend:
         except Exception:
             return
 
+    def _renew_job_lease(self, job_id: str, ttl_seconds: int) -> None:
+        ttl_seconds = int(ttl_seconds or 0)
+        if ttl_seconds <= 0:
+            return
+        try:
+            self._client.expire(self._job_key(job_id), ttl_seconds)
+        except Exception:
+            return
+
+    def _renew_cancel_lease(self, job_id: str, ttl_seconds: int) -> None:
+        ttl_seconds = int(ttl_seconds or 0)
+        if ttl_seconds <= 0:
+            return
+        try:
+            self._client.expire(self._cancel_key(job_id), ttl_seconds)
+        except Exception:
+            return
+
     def _is_cancel_requested(self, job_id: str) -> bool:
         try:
             return bool(self._client.exists(self._cancel_key(job_id)))
@@ -583,9 +601,9 @@ class _RedisBackend:
         status = str(record.get("status") or "")
         terminal = status in {"succeeded", "failed", "canceled"}
 
-        ttl = None
-        if self._job_ttl_seconds > 0 and terminal:
-            ttl = self._job_ttl_seconds
+        ttl: int | None = None
+        if self._job_ttl_seconds > 0:
+            ttl = int(self._job_ttl_seconds) if terminal else int(self._active_ttl_seconds())
 
         try:
             if ttl is not None:
@@ -656,6 +674,8 @@ class _RedisBackend:
                         return
                     last_lease_renew = now
                     self._renew_active_lease(job_id, active_ttl)
+                    self._renew_job_lease(job_id, active_ttl)
+                    self._renew_cancel_lease(job_id, active_ttl)
 
                 for _ in range(20):
                     if self._stop_event.is_set():
