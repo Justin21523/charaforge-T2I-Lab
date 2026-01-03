@@ -147,12 +147,4 @@ async def cancel_scan(job_id: str, request: Request) -> Dict[str, Any]:
     result = manager.cancel(job_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    if not result.canceled:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "MODELS_SCAN_JOB_NOT_CANCELLABLE",
-                "message": "Model scan job cannot be canceled once running",
-            },
-        )
     return result.snapshot

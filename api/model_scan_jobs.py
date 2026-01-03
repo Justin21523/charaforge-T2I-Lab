@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional, Tuple
 
-from core.train.registry import get_model_registry
+from core.train.registry import ModelScanCancelledError, get_model_registry
 
 try:
     import redis  # type: ignore
@@ -54,6 +54,7 @@ class _MemoryBackend:
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._expires_at: Dict[str, float] = {}
         self._active_job_id: str | None = None
+        self._cancel_events: Dict[str, threading.Event] = {}
 
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._stop_event = threading.Event()
@@ -133,6 +134,12 @@ class _MemoryBackend:
             record["cancel_requested"] = True
             record["updated_at"] = time.time()
 
+            if status == "running":
+                event = self._cancel_events.get(job_id)
+                if event is not None:
+                    event.set()
+                return CancelResult(snapshot=_snapshot_from_record(record), canceled=False)
+
             if status != "queued":
                 return CancelResult(snapshot=_snapshot_from_record(record), canceled=False)
 
@@ -178,6 +185,8 @@ class _MemoryBackend:
                 record["status"] = "running"
                 record["started_at"] = time.time()
                 record["updated_at"] = time.time()
+                cancel_event = threading.Event()
+                self._cancel_events[job_id] = cancel_event
 
             replace = bool(record.get("replace"))
             try:
@@ -186,7 +195,11 @@ class _MemoryBackend:
                 for _ in range(20):
                     if self._stop_event.is_set():
                         raise RuntimeError("Worker stopped")
-                    last_result = registry.scan_filesystem(replace)
+                    if cancel_event.is_set():
+                        raise ModelScanCancelledError("Cancelled")
+                    last_result = registry.scan_filesystem(
+                        replace, cancel_check=cancel_event.is_set
+                    )
                     if str(last_result.get("status") or "") != "busy":
                         break
                     time.sleep(0.25)
@@ -205,6 +218,19 @@ class _MemoryBackend:
                     self._apply_ttl_locked(job_id, record)
                     if self._active_job_id == job_id:
                         self._active_job_id = None
+            except ModelScanCancelledError:
+                with self._lock:
+                    record = self._jobs.get(job_id)
+                    if record is None:
+                        continue
+                    record["status"] = "canceled"
+                    record["finished_at"] = time.time()
+                    record["updated_at"] = time.time()
+                    record["cancel_requested"] = True
+                    record["error"] = {"error": "CANCELED", "message": "Canceled"}
+                    self._apply_ttl_locked(job_id, record)
+                    if self._active_job_id == job_id:
+                        self._active_job_id = None
             except Exception as exc:
                 with self._lock:
                     record = self._jobs.get(job_id)
@@ -217,6 +243,9 @@ class _MemoryBackend:
                     self._apply_ttl_locked(job_id, record)
                     if self._active_job_id == job_id:
                         self._active_job_id = None
+            finally:
+                with self._lock:
+                    self._cancel_events.pop(job_id, None)
 
 
 class _RedisBackend:
@@ -236,6 +265,11 @@ class _RedisBackend:
         )
 
         self._namespace = "charaforge:model_scan"
+
+    def _active_ttl_seconds(self) -> int:
+        if self._job_ttl_seconds > 0:
+            return max(self._job_ttl_seconds, 3600)
+        return 3600
 
     def ping(self) -> bool:
         try:
@@ -261,7 +295,7 @@ class _RedisBackend:
         self.start()
 
         job_id = str(uuid.uuid4())
-        active_ttl = max(self._job_ttl_seconds, 3600) if self._job_ttl_seconds > 0 else 3600
+        active_ttl = self._active_ttl_seconds()
         try:
             claimed = self._client.set(self._active_key(), job_id, ex=active_ttl, nx=True)
         except Exception as exc:
@@ -314,6 +348,10 @@ class _RedisBackend:
         status = str(record.get("status") or "")
         record["cancel_requested"] = True
         record["updated_at"] = time.time()
+        try:
+            self._client.set(self._cancel_key(job_id), "1", ex=max(self._job_ttl_seconds, 300))
+        except Exception:
+            pass
 
         if status != "queued":
             self._save_job(job_id, record)
@@ -324,19 +362,56 @@ class _RedisBackend:
         record["error"] = {"error": "CANCELED", "message": "Canceled"}
         pipe = self._client.pipeline()
         pipe.lrem(self._queue_key(), 0, job_id)
-        pipe.delete(self._active_key())
         pipe.execute()
+        self._release_active_lease(job_id)
         self._save_job(job_id, record)
         return CancelResult(snapshot=_snapshot_from_record(record), canceled=True)
 
     def _active_key(self) -> str:
         return f"{self._namespace}:active"
 
+    def _cancel_key(self, job_id: str) -> str:
+        return f"{self._namespace}:cancel:{job_id}"
+
     def _queue_key(self) -> str:
         return f"{self._namespace}:queue"
 
     def _job_key(self, job_id: str) -> str:
         return f"{self._namespace}:job:{job_id}"
+
+    def _release_active_lease(self, job_id: str) -> None:
+        try:
+            self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                self._active_key(),
+                job_id,
+            )
+        except Exception:
+            return
+
+    def _renew_active_lease(self, job_id: str, ttl_seconds: int) -> None:
+        ttl_seconds = int(ttl_seconds or 0)
+        if ttl_seconds <= 0:
+            return
+        try:
+            self._client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                1,
+                self._active_key(),
+                job_id,
+                ttl_seconds,
+            )
+        except Exception:
+            return
+
+    def _is_cancel_requested(self, job_id: str) -> bool:
+        try:
+            return bool(self._client.exists(self._cancel_key(job_id)))
+        except Exception:
+            return False
 
     def _load_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         try:
@@ -386,13 +461,13 @@ class _RedisBackend:
             if str(record.get("status") or "") != "queued":
                 continue
 
-            if bool(record.get("cancel_requested")):
+            if bool(record.get("cancel_requested")) or self._is_cancel_requested(job_id):
                 record["status"] = "canceled"
                 record["finished_at"] = time.time()
                 record["updated_at"] = time.time()
                 record["error"] = {"error": "CANCELED", "message": "Canceled"}
                 self._save_job(job_id, record)
-                self._client.delete(self._active_key())
+                self._release_active_lease(job_id)
                 continue
 
             record["status"] = "running"
@@ -404,10 +479,40 @@ class _RedisBackend:
             try:
                 registry = get_model_registry()
                 last_result: Dict[str, Any] | None = None
+                active_ttl = self._active_ttl_seconds()
+                last_cancel_check = 0.0
+                cancel_cached = False
+                last_lease_renew = 0.0
+
+                def _cancel_check() -> bool:
+                    nonlocal cancel_cached
+                    nonlocal last_cancel_check
+                    if cancel_cached:
+                        return True
+                    now = time.monotonic()
+                    if now - last_cancel_check < 0.25:
+                        return False
+                    last_cancel_check = now
+                    cancel_cached = self._is_cancel_requested(job_id)
+                    return cancel_cached
+
+                def _heartbeat() -> None:
+                    nonlocal last_lease_renew
+                    now = time.monotonic()
+                    if now - last_lease_renew < 10.0:
+                        return
+                    last_lease_renew = now
+                    self._renew_active_lease(job_id, active_ttl)
+
                 for _ in range(20):
                     if self._stop_event.is_set():
                         raise RuntimeError("Worker stopped")
-                    last_result = registry.scan_filesystem(replace)
+                    if _cancel_check():
+                        raise ModelScanCancelledError("Cancelled")
+                    _heartbeat()
+                    last_result = registry.scan_filesystem(
+                        replace, cancel_check=_cancel_check, heartbeat=_heartbeat
+                    )
                     if str(last_result.get("status") or "") != "busy":
                         break
                     time.sleep(0.25)
@@ -421,7 +526,24 @@ class _RedisBackend:
                 record["updated_at"] = time.time()
                 record["result"] = result
                 self._save_job(job_id, record)
-                self._client.delete(self._active_key())
+                try:
+                    self._client.delete(self._cancel_key(job_id))
+                except Exception:
+                    pass
+                self._release_active_lease(job_id)
+            except ModelScanCancelledError:
+                record = self._load_job(job_id) or record
+                record["status"] = "canceled"
+                record["finished_at"] = time.time()
+                record["updated_at"] = time.time()
+                record["cancel_requested"] = True
+                record["error"] = {"error": "CANCELED", "message": "Canceled"}
+                self._save_job(job_id, record)
+                try:
+                    self._client.delete(self._cancel_key(job_id))
+                except Exception:
+                    pass
+                self._release_active_lease(job_id)
             except Exception as exc:
                 record = self._load_job(job_id) or record
                 record["status"] = "failed"
@@ -429,7 +551,11 @@ class _RedisBackend:
                 record["updated_at"] = time.time()
                 record["error"] = {"error": "FAILED", "message": str(exc)}
                 self._save_job(job_id, record)
-                self._client.delete(self._active_key())
+                try:
+                    self._client.delete(self._cancel_key(job_id))
+                except Exception:
+                    pass
+                self._release_active_lease(job_id)
 
 
 class ModelScanJobManager:
@@ -481,4 +607,3 @@ class ModelScanJobManager:
 
     def cancel(self, job_id: str) -> CancelResult | None:
         return self._backend.cancel(job_id)
-
