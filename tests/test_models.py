@@ -218,6 +218,49 @@ async def test_models_scan_job_submit_returns_409_when_active(tmp_path: Path):
 
 
 @pytest.mark.anyio
+async def test_models_scan_job_list_and_delete():
+    models_root = Path(os.environ["AI_MODELS_ROOT"])
+
+    _touch(models_root / "stable-diffusion" / "sd15" / "demo_sd15" / "model_index.json")
+    _touch(models_root / "stable-diffusion" / "sdxl" / "demo_sdxl" / "model_index.json")
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        submitted = await client.post("/api/v1/models/scan/submit", json={"replace": True})
+        assert submitted.status_code == 200
+        job_id = submitted.json()["job_id"]
+
+        snapshot: dict | None = None
+        for _ in range(80):
+            res = await client.get(f"/api/v1/models/scan/status/{job_id}")
+            assert res.status_code == 200
+            snapshot = res.json()
+            if snapshot.get("status") in {"succeeded", "failed", "canceled"}:
+                break
+            await asyncio.sleep(0.05)
+
+        assert snapshot is not None
+        assert snapshot.get("status") == "succeeded"
+
+        res = await client.get("/api/v1/models/scan/jobs")
+        assert res.status_code == 200
+        payload = res.json()
+        assert payload.get("count", 0) >= 1
+        jobs = payload.get("jobs") or []
+        assert any(j.get("job_id") == job_id for j in jobs)
+
+        res = await client.get("/api/v1/models/scan/jobs", params={"all": True})
+        assert res.status_code == 403
+
+        deleted = await client.delete(f"/api/v1/models/scan/jobs/{job_id}")
+        assert deleted.status_code == 200
+        assert deleted.json().get("deleted_record") is True
+
+        missing = await client.get(f"/api/v1/models/scan/status/{job_id}")
+        assert missing.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_models_scan_job_can_cancel_while_running(monkeypatch):
     from core.train.registry import ModelScanCancelledError, get_model_registry
 
@@ -260,6 +303,10 @@ async def test_models_scan_job_can_cancel_while_running(monkeypatch):
         assert snapshot is not None
         assert snapshot.get("status") == "running"
 
+        delete_res = await client.delete(f"/api/v1/models/scan/jobs/{job_id}")
+        assert delete_res.status_code == 409
+        assert delete_res.json().get("error") == "MODELS_SCAN_JOB_RUNNING"
+
         res = await client.post(f"/api/v1/models/scan/cancel/{job_id}")
         assert res.status_code == 200
 
@@ -274,3 +321,10 @@ async def test_models_scan_job_can_cancel_while_running(monkeypatch):
         assert snapshot is not None
         assert snapshot.get("status") == "canceled"
         assert snapshot.get("cancel_requested") is True
+
+        deleted = await client.delete(f"/api/v1/models/scan/jobs/{job_id}")
+        assert deleted.status_code == 200
+        assert deleted.json().get("deleted_record") is True
+
+        missing = await client.get(f"/api/v1/models/scan/status/{job_id}")
+        assert missing.status_code == 404
