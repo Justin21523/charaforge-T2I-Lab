@@ -1,5 +1,34 @@
 version: "3.9"
 
+x-backend-build: &backend_build
+  context: ..
+  dockerfile: docker/Dockerfile.backend
+
+x-backend-env: &backend_env
+  PROJECT_SLUG: ${PROJECT_SLUG:-charaforge-t2i-lab}
+  # AI warehouse roots (in-container)
+  AI_MODELS_ROOT: /data/models
+  AI_CACHE_ROOT: /data/cache
+  AI_DATASETS_ROOT: /data/datasets
+  AI_TRAINING_ROOT: /data/training
+  # Keep caches inside the shared warehouse volume
+  XDG_CACHE_HOME: /data/cache
+  HF_HOME: /data/cache/huggingface
+  TRANSFORMERS_CACHE: /data/cache/huggingface
+  TORCH_HOME: /data/cache/torch
+  # Container networking
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:3000}
+
+x-backend-volumes: &backend_volumes
+  # Use bind mounts by setting *_HOST in docker/.env (or fall back to named volumes).
+  - ${AI_MODELS_ROOT_HOST:-ai_models_data}:/data/models
+  - ${AI_CACHE_ROOT_HOST:-ai_cache_data}:/data/cache
+  - ${AI_DATASETS_ROOT_HOST:-ai_datasets_data}:/data/datasets
+  - ${AI_TRAINING_ROOT_HOST:-ai_training_data}:/data/training
+
 services:
   redis:
     image: redis:7-alpine
@@ -16,27 +45,18 @@ services:
 
   api:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      <<: *backend_build
     environment:
-      # AI_WAREHOUSE 3.0
-      - PROJECT_SLUG=charaforge-t2i-lab
-      - AI_MODELS_ROOT=/mnt/c/ai_models
-      - AI_CACHE_ROOT=/mnt/c/ai_cache
-      - AI_DATASETS_ROOT=/mnt/data/datasets
-      - AI_TRAINING_ROOT=/mnt/data/training
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - API_CORS_ORIGINS=http://localhost:3000
+      <<: *backend_env
+      # Avoid embedded worker threads inside the API container (use dedicated worker services).
+      API_T2I_WORKER_ENABLED: "false"
+      API_MODELS_SCAN_WORKER_ENABLED: "false"
       # T2I dispatch:
       # - redis (default): use `t2i_worker` (python -m api.t2i_worker)
       # - celery: use `t2i_celery_worker` (queue=t2i)
-      - API_T2I_DISPATCH_MODE=${API_T2I_DISPATCH_MODE:-redis}
+      API_T2I_DISPATCH_MODE: ${API_T2I_DISPATCH_MODE:-redis}
     volumes:
-      - /mnt/c/ai_models:/mnt/c/ai_models
-      - /mnt/c/ai_cache:/mnt/c/ai_cache
-      - /mnt/data:/mnt/data
+      *backend_volumes
     ports:
       - "8000:8000"
     depends_on:
@@ -51,21 +71,11 @@ services:
 
   worker:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      <<: *backend_build
     environment:
-      - PROJECT_SLUG=charaforge-t2i-lab
-      - AI_MODELS_ROOT=/mnt/c/ai_models
-      - AI_CACHE_ROOT=/mnt/c/ai_cache
-      - AI_DATASETS_ROOT=/mnt/data/datasets
-      - AI_TRAINING_ROOT=/mnt/data/training
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      <<: *backend_env
     volumes:
-      - /mnt/c/ai_models:/mnt/c/ai_models
-      - /mnt/c/ai_cache:/mnt/c/ai_cache
-      - /mnt/data:/mnt/data
+      *backend_volumes
     depends_on:
       redis:
         condition: service_healthy
@@ -73,46 +83,27 @@ services:
 
   t2i_worker:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      <<: *backend_build
     environment:
-      - PROJECT_SLUG=charaforge-t2i-lab
-      - AI_MODELS_ROOT=/mnt/c/ai_models
-      - AI_CACHE_ROOT=/mnt/c/ai_cache
-      - AI_DATASETS_ROOT=/mnt/data/datasets
-      - AI_TRAINING_ROOT=/mnt/data/training
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - API_T2I_WORKER_ENABLED=true
-      - API_T2I_DISPATCH_MODE=redis
+      <<: *backend_env
+      API_T2I_WORKER_ENABLED: "true"
+      API_T2I_DISPATCH_MODE: redis
     volumes:
-      - /mnt/c/ai_models:/mnt/c/ai_models
-      - /mnt/c/ai_cache:/mnt/c/ai_cache
-      - /mnt/data:/mnt/data
+      *backend_volumes
     depends_on:
       redis:
         condition: service_healthy
     command: python -m api.t2i_worker
 
   t2i_celery_worker:
+    profiles: ["celery"]
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      <<: *backend_build
     environment:
-      - PROJECT_SLUG=charaforge-t2i-lab
-      - AI_MODELS_ROOT=/mnt/c/ai_models
-      - AI_CACHE_ROOT=/mnt/c/ai_cache
-      - AI_DATASETS_ROOT=/mnt/data/datasets
-      - AI_TRAINING_ROOT=/mnt/data/training
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - API_T2I_DISPATCH_MODE=celery
+      <<: *backend_env
+      API_T2I_DISPATCH_MODE: celery
     volumes:
-      - /mnt/c/ai_models:/mnt/c/ai_models
-      - /mnt/c/ai_cache:/mnt/c/ai_cache
-      - /mnt/data:/mnt/data
+      *backend_volumes
     depends_on:
       redis:
         condition: service_healthy
@@ -120,27 +111,18 @@ services:
 
   models_scan_worker:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      <<: *backend_build
     environment:
-      - PROJECT_SLUG=charaforge-t2i-lab
-      - AI_MODELS_ROOT=/mnt/c/ai_models
-      - AI_CACHE_ROOT=/mnt/c/ai_cache
-      - AI_DATASETS_ROOT=/mnt/data/datasets
-      - AI_TRAINING_ROOT=/mnt/data/training
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      <<: *backend_env
     volumes:
-      - /mnt/c/ai_models:/mnt/c/ai_models
-      - /mnt/c/ai_cache:/mnt/c/ai_cache
-      - /mnt/data:/mnt/data
+      *backend_volumes
     depends_on:
       redis:
         condition: service_healthy
     command: python -m api.model_scan_worker
 
   react:
+    profiles: ["frontend"]
     image: node:18-alpine
     working_dir: /app/frontend/react_app
     volumes:
@@ -156,3 +138,7 @@ services:
 
 volumes:
   redis_data:
+  ai_models_data:
+  ai_cache_data:
+  ai_datasets_data:
+  ai_training_data:
