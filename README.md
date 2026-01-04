@@ -187,13 +187,27 @@ export API_T2I_DISPATCH_MODE=celery
 bash scripts/start_t2i_celery_worker.sh
 
 # Or via Docker Compose
-API_T2I_DISPATCH_MODE=celery docker compose -f docker/docker-compose.yml up --build t2i_celery_worker
+API_T2I_DISPATCH_MODE=celery docker compose -f docker/docker-compose.yml --profile celery up --build t2i_celery_worker
 ```
 
-## Docker
+## Docker (Compose)
 
 ```bash
+# Quick start (backend + Redis + workers; uses named volumes by default)
 docker compose -f docker/docker-compose.yml up --build
+```
+
+If you already have an `AI_CACHE_ROOT` / models warehouse on the host, use bind mounts:
+
+```bash
+cp docker/.env.example docker/.env
+# edit docker/.env (AI_*_ROOT_HOST paths)
+
+# Backend + workers
+docker compose --env-file docker/.env -f docker/docker-compose.yml up --build
+
+# Include React dev server
+docker compose --env-file docker/.env -f docker/docker-compose.yml --profile frontend up --build
 ```
 
 ## Dev Checks
