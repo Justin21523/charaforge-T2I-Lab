@@ -6,7 +6,7 @@ import {
   Layers,
   Zap,
   Brain,
-  Gallery,
+  Images,
   ClipboardList,
   ChevronRight
 } from 'lucide-react';
@@ -41,7 +41,7 @@ const Sidebar = ({ currentPath }) => {
     },
     {
       path: '/gallery',
-      icon: Gallery,
+      icon: Images,
       label: '圖片畫廊',
       description: '生成結果瀏覽'
     },

@@ -3,7 +3,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { Upload, Download, Play, Pause, Trash2, FileText, Clock } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { useAPI } from '../../hooks/useAPI';
-import { formatDuration, downloadBlob } from '../../utils/helpers';
+import { downloadBlob } from '../../utils/helpers';
 import JobStatus from './JobStatus';
 import Loading from '../common/Loading';
 import toast from 'react-hot-toast';

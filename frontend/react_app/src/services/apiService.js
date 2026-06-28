@@ -273,8 +273,6 @@ class APIService {
 
   setApiKey(apiKey, apiKeyHeader = this.apiKeyHeader) {
     const nextHeader = apiKeyHeader || API_KEY_HEADER;
-    const prevHeader = this.apiKeyHeader;
-
     this.apiKey = apiKey || "";
     this.apiKeyHeader = nextHeader;
 

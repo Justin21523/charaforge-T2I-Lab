@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CharaForge T2I Lab | Portfolio Demo</title>
+    <meta
+      name="description"
+      content="CharaForge T2I Lab portfolio demo: a static walkthrough of a FastAPI + React text-to-image and LoRA training platform."
+    />
+    <meta property="og:title" content="CharaForge T2I Lab | Portfolio Demo" />
+    <meta
+      property="og:description"
+      content="Static portfolio walkthrough for an AI image generation, LoRA training, queue, and model registry platform."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="./assets/hero-dashboard.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="CharaForge T2I Lab">
+        <span class="brand-mark">CF</span>
+        <span>CharaForge T2I Lab</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a href="#demo">Demo</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#stack">Stack</a>
+        <a href="#runbook">Runbook</a>
+      </nav>
+      <a class="github-link" href="https://github.com/Justin21523/charaforge-T2I-Lab">GitHub</a>
+    </header>
+
+    <main id="top">
+      <section class="hero-section">
+        <div class="hero-copy">
+          <p class="eyebrow">Portfolio case study · Static GitHub Pages demo</p>
+          <h1>AI image generation and LoRA training lab, packaged for review.</h1>
+          <p class="hero-lede">
+            This demo shows the product experience and engineering design behind a FastAPI +
+            React platform for text-to-image generation, model registry scans, async GPU jobs,
+            LoRA fine-tuning, and secured training progress streams.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#demo">Open demo scenario</a>
+            <a class="button secondary" href="#architecture">View architecture</a>
+          </div>
+          <div class="proof-grid" aria-label="Project highlights">
+            <div><strong>FastAPI</strong><span>typed API + auth</span></div>
+            <div><strong>Redis/Celery</strong><span>async job queues</span></div>
+            <div><strong>React</strong><span>operator dashboard</span></div>
+            <div><strong>LoRA</strong><span>training workflow</span></div>
+          </div>
+        </div>
+        <figure class="hero-visual">
+          <img src="./assets/hero-dashboard.png" alt="CharaForge T2I Lab dashboard mockup" />
+          <figcaption>
+            Public page is static and mock-driven. The source repo includes the local full-stack API.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="section" id="demo">
+        <div class="section-heading">
+          <p class="eyebrow">Interactive walkthrough</p>
+          <h2>Demo scenarios for screenshots and interview review</h2>
+          <p>
+            Pick a scenario to update the workspace. The flow is intentionally static so it works on
+            GitHub Pages without GPU, Redis, model weights, or backend secrets.
+          </p>
+        </div>
+
+        <div class="demo-shell">
+          <aside class="scenario-list" aria-label="Demo scenarios">
+            <button class="scenario-card active" data-scenario="portrait">
+              <span>01</span>
+              <strong>Text-to-image job</strong>
+              <small>Prompt, seed, queue, result metadata</small>
+            </button>
+            <button class="scenario-card" data-scenario="controlnet">
+              <span>02</span>
+              <strong>ControlNet guidance</strong>
+              <small>Conditioned generation with a control image</small>
+            </button>
+            <button class="scenario-card" data-scenario="batch">
+              <span>03</span>
+              <strong>Batch processing</strong>
+              <small>CSV/JSON prompt batches and downloadable outputs</small>
+            </button>
+            <button class="scenario-card" data-scenario="lora">
+              <span>04</span>
+              <strong>LoRA training monitor</strong>
+              <small>Dataset validation, steps, loss, checkpoint export</small>
+            </button>
+          </aside>
+
+          <section class="workspace" aria-live="polite">
+            <div class="workspace-toolbar">
+              <div>
+                <span class="status-dot"></span>
+                <span id="scenario-status">Mock job succeeded</span>
+              </div>
+              <button class="button compact" id="replay-button">Replay flow</button>
+            </div>
+
+            <div class="workspace-grid">
+              <div class="panel prompt-panel">
+                <div class="panel-title">Prompt / Config</div>
+                <h3 id="scenario-title">Character portrait generation</h3>
+                <p id="scenario-description">
+                  Submit a reproducible image job with a controlled seed and LoRA stack.
+                </p>
+                <dl class="config-list" id="scenario-config"></dl>
+              </div>
+
+              <div class="panel image-panel">
+                <div class="panel-title">Output Preview</div>
+                <img id="scenario-image" src="./assets/scenario-portrait.png" alt="Generated demo output" />
+                <div class="image-meta" id="scenario-meta"></div>
+              </div>
+
+              <div class="panel queue-panel">
+                <div class="panel-title">Job Timeline</div>
+                <ol class="timeline" id="scenario-timeline"></ol>
+              </div>
+
+              <div class="panel api-panel">
+                <div class="panel-title">API Contract</div>
+                <pre id="scenario-api"></pre>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="section split" id="architecture">
+        <div class="section-heading">
+          <p class="eyebrow">System design</p>
+          <h2>Architecture that supports real local inference</h2>
+          <p>
+            The public demo is static, but the repository contains a working backend shape for local
+            GPU usage: API auth, model registry, dataset validation, async jobs, workers, and output
+            cleanup.
+          </p>
+        </div>
+        <div class="architecture-map">
+          <div class="arch-node">React Dashboard</div>
+          <div class="arch-arrow">request</div>
+          <div class="arch-node">FastAPI /api/v1</div>
+          <div class="arch-arrow">queue</div>
+          <div class="arch-node">Redis + Celery</div>
+          <div class="arch-arrow">execute</div>
+          <div class="arch-node">Diffusers / PEFT</div>
+          <div class="arch-arrow">persist</div>
+          <div class="arch-node">AI_WAREHOUSE</div>
+        </div>
+        <div class="feature-grid">
+          <article>
+            <h3>Security layer</h3>
+            <p>API keys, JWT refresh cookies, CSRF checks, scoped keys, request IDs, and rate-limit buckets.</p>
+          </article>
+          <article>
+            <h3>Async operations</h3>
+            <p>T2I and model-scan jobs support queued/running/succeeded/failed/canceled states.</p>
+          </article>
+          <article>
+            <h3>Training workflow</h3>
+            <p>Dataset validation, LoRA config presets, Celery progress, Redis PubSub, and WebSocket updates.</p>
+          </article>
+          <article>
+            <h3>Model registry</h3>
+            <p>Filesystem scanning for SD1.5, SDXL, ControlNet, LoRA, embeddings, and usage metadata.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="stack">
+        <div class="section-heading">
+          <p class="eyebrow">Technical stack</p>
+          <h2>What this project demonstrates</h2>
+        </div>
+        <div class="stack-table" role="table" aria-label="Technical stack">
+          <div role="row"><strong>Frontend</strong><span>React, Vite, react-router, lucide icons, localStorage state, dashboard UI</span></div>
+          <div role="row"><strong>Backend</strong><span>FastAPI, Pydantic settings, structured error format, CORS, GZip, request IDs</span></div>
+          <div role="row"><strong>AI pipeline</strong><span>PyTorch, Diffusers, PEFT, LoRA manager, ControlNet hooks, safety/watermark modules</span></div>
+          <div role="row"><strong>Workers</strong><span>Redis-backed queues, Celery training tasks, cancellable jobs, cleanup endpoints</span></div>
+          <div role="row"><strong>Deployment</strong><span>Docker Compose for local full stack; GitHub Pages for static portfolio review</span></div>
+        </div>
+      </section>
+
+      <section class="section runbook" id="runbook">
+        <div>
+          <p class="eyebrow">Reviewer guide</p>
+          <h2>How to evaluate the project</h2>
+          <p>
+            Use this page for quick visual review. Use the repository README for local backend setup
+            when GPU/model access is available.
+          </p>
+        </div>
+        <div class="runbook-cards">
+          <article>
+            <strong>1. Review the demo</strong>
+            <span>Walk through generation, ControlNet, batch, and training states above.</span>
+          </article>
+          <article>
+            <strong>2. Inspect the API</strong>
+            <span>Start FastAPI locally and open <code>/docs</code> for the full contract.</span>
+          </article>
+          <article>
+            <strong>3. Check engineering depth</strong>
+            <span>Look at auth, job managers, dataset validation, registry, and Celery tasks.</span>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>CharaForge T2I Lab · Portfolio-ready static demo</span>
+      <a href="#top">Back to top</a>
+    </footer>
+
+    <script src="./scripts.js"></script>
+  </body>
+</html>

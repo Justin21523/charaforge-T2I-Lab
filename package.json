@@ -1,0 +1,11 @@
+{
+  "name": "charaforge-t2i-lab",
+  "private": true,
+  "description": "Portfolio-ready static demo and full-stack AI lab source for CharaForge T2I Lab.",
+  "scripts": {
+    "frontend:install": "npm --prefix frontend/react_app ci",
+    "frontend:lint": "npm --prefix frontend/react_app run lint",
+    "frontend:build": "npm --prefix frontend/react_app run build",
+    "frontend:test": "npm --prefix frontend/react_app run test -- --run"
+  }
+}

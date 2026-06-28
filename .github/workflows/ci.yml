@@ -47,3 +47,10 @@ jobs:
         working-directory: frontend/react_app
         run: npm run lint
 
+      - name: Test (vitest)
+        working-directory: frontend/react_app
+        run: npm run test -- --run
+
+      - name: Build (vite)
+        working-directory: frontend/react_app
+        run: npm run build

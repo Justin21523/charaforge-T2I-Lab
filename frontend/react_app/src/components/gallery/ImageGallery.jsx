@@ -1,5 +1,5 @@
 /*frontend/react_app/src/components/gallery/ImageGallery.jsx*/
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Image as ImageIcon, Download, Trash2, Eye, Grid, List } from 'lucide-react';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import apiService from '../../services/apiService';
@@ -22,20 +22,7 @@ const ImageGallery = () => {
     }
   }, [images, currentImage]);
 
-  const addImage = useCallback((imagePath, metadata) => {
-    const newImage = {
-      id: Date.now(),
-      path: imagePath,
-      metadata: metadata || {},
-      addedAt: new Date().toISOString()
-    };
-
-    setImages(prev => [newImage, ...prev]);
-    setCurrentImage(newImage);
-    toast.success('圖片已添加到畫廊');
-  }, [setImages]);
-
-  const removeImage = useCallback((imageId) => {
+  const removeImage = (imageId) => {
     setImages(prev => prev.filter(img => img.id !== imageId));
 
     if (currentImage && currentImage.id === imageId) {
@@ -50,9 +37,9 @@ const ImageGallery = () => {
     });
 
     toast.success('圖片已從畫廊移除');
-  }, [setImages, currentImage, images]);
+  };
 
-  const removeSelectedImages = useCallback(() => {
+  const removeSelectedImages = () => {
     if (selectedImages.size === 0) {
       toast.error('請先選擇要刪除的圖片');
       return;
@@ -68,9 +55,9 @@ const ImageGallery = () => {
 
     setSelectedImages(new Set());
     toast.success(`已刪除 ${selectedImages.size} 張圖片`);
-  }, [selectedImages, images, setImages, currentImage]);
+  };
 
-  const downloadCurrentImage = useCallback(async () => {
+  const downloadCurrentImage = async () => {
     if (!currentImage) {
       toast.error('沒有選中的圖片');
       return;
@@ -97,9 +84,9 @@ const ImageGallery = () => {
       toast.error('下載失敗');
       console.error('Download failed:', error);
     }
-  }, [currentImage]);
+  };
 
-  const downloadSelectedImages = useCallback(async () => {
+  const downloadSelectedImages = async () => {
     if (selectedImages.size === 0) {
       toast.error('請先選擇要下載的圖片');
       return;
@@ -147,9 +134,9 @@ const ImageGallery = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedImages, images]);
+  };
 
-  const toggleImageSelection = useCallback((imageId) => {
+  const toggleImageSelection = (imageId) => {
     setSelectedImages(prev => {
       const newSet = new Set(prev);
       if (newSet.has(imageId)) {
@@ -159,17 +146,17 @@ const ImageGallery = () => {
       }
       return newSet;
     });
-  }, []);
+  };
 
-  const selectAllImages = useCallback(() => {
+  const selectAllImages = () => {
     setSelectedImages(new Set(images.map(img => img.id)));
-  }, [images]);
+  };
 
-  const clearSelection = useCallback(() => {
+  const clearSelection = () => {
     setSelectedImages(new Set());
-  }, []);
+  };
 
-  const clearGallery = useCallback(() => {
+  const clearGallery = () => {
     if (images.length === 0) {
       toast.info('畫廊已經是空的');
       return;
@@ -181,7 +168,7 @@ const ImageGallery = () => {
       setSelectedImages(new Set());
       toast.success('畫廊已清空');
     }
-  }, [images, setImages]);
+  };
 
   return (
     <div className="image-gallery">

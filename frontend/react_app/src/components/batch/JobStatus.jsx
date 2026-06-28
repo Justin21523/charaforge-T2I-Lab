@@ -5,7 +5,7 @@ import { useAPI } from '../../hooks/useAPI';
 import { formatDuration } from '../../utils/helpers';
 import Loading from '../common/Loading';
 
-const JobStatus = ({ jobId, onRefresh }) => {
+const JobStatus = ({ jobId }) => {
   const { apiCall, apiService } = useAPI();
   const [jobDetails, setJobDetails] = useState(null);
   const [results, setResults] = useState([]);
