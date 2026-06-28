@@ -6,6 +6,9 @@
     "frontend:install": "npm --prefix frontend/react_app ci",
     "frontend:lint": "npm --prefix frontend/react_app run lint",
     "frontend:build": "npm --prefix frontend/react_app run build",
-    "frontend:test": "npm --prefix frontend/react_app run test -- --run"
+    "frontend:test": "npm --prefix frontend/react_app run test -- --run",
+    "demo:dev": "python3 -m http.server 4173 --directory demo-app",
+    "demo:build": "node -e \"require('fs').accessSync('demo-app/index.html')\"",
+    "demo:preview": "python3 -m http.server 4173 --directory demo-app"
   }
 }
