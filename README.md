@@ -14,10 +14,143 @@ The public demo is a static GitHub Pages walkthrough:
 - Source: [`portfolio-web/`](portfolio-web/)
 - Includes: interactive mock scenarios, screenshot gallery, recorded MP4 walkthrough,
   architecture overview, stack notes, and reviewer runbook.
+- Recording: [`portfolio-web/assets/demo-walkthrough.mp4`](portfolio-web/assets/demo-walkthrough.mp4)
 
 GitHub Pages cannot run GPU inference, Redis, Celery, or private model weights. The demo
 therefore uses mock/recorded states for stable portfolio review while the repo keeps the
 real FastAPI backend and worker code for local execution.
+
+## Visual Tour
+
+| Dashboard overview | Text-to-image scenario |
+| --- | --- |
+| ![Dashboard overview](portfolio-web/assets/hero-dashboard.png) | ![Text-to-image scenario](portfolio-web/assets/scenario-portrait.png) |
+
+| ControlNet flow | LoRA training monitor |
+| --- | --- |
+| ![ControlNet scenario](portfolio-web/assets/scenario-controlnet.png) | ![LoRA training monitor](portfolio-web/assets/scenario-lora.png) |
+
+| Batch processing | API and job state |
+| --- | --- |
+| ![Batch processing scenario](portfolio-web/assets/scenario-batch.png) | ![API and job state](portfolio-web/assets/scenario-api.png) |
+
+## System Flow
+
+```mermaid
+flowchart LR
+  reviewer[Reviewer / Interviewer] --> pages[GitHub Pages Demo]
+  pages --> scenarios[Mock Scenarios + Screenshots + MP4]
+  scenarios --> readme[README + Runbook]
+
+  operator[Local Operator] --> react[React / Vite Dashboard]
+  react --> api[FastAPI /api/v1]
+  api --> redis[(Redis)]
+  api --> registry[Model Registry]
+  redis --> celery[Celery Workers]
+  celery --> t2i[Diffusers T2I Pipeline]
+  celery --> train[PEFT LoRA Trainer]
+  t2i --> warehouse[(AI_WAREHOUSE Outputs)]
+  train --> warehouse
+  api --> observability[Metrics + JSON Logs + Request IDs]
+```
+
+## Architecture Table
+
+| Layer | Main files | Responsibility | Demo signal |
+| --- | --- | --- | --- |
+| Static showcase | `portfolio-web/` | GPU-free portfolio page, screenshots, MP4 walkthrough | Live GitHub Pages review |
+| React UI | `frontend/react_app/` | Generation, batch, jobs, LoRA, training, gallery screens | Operator workflow design |
+| FastAPI API | `api/` | Versioned routes, auth, rate limits, request IDs, errors | Swagger contract at `/docs` |
+| Core AI logic | `core/t2i/`, `core/train/` | Diffusers pipeline, ControlNet hooks, LoRA training helpers | AI libraries wrapped behind app logic |
+| Workers | `workers/` | Celery app and long-running task execution | Async GPU job control |
+| Config/storage | `configs/`, `core/config.py` | YAML/env settings and AI_WAREHOUSE paths | Reproducible local setup |
+| Tests/tooling | `tests/`, `scripts/` | pytest coverage, setup, env checks, smoke scripts | Reviewable engineering hygiene |
+
+## Runtime Job Lifecycle
+
+```mermaid
+sequenceDiagram
+  participant UI as React Dashboard
+  participant API as FastAPI
+  participant Q as Redis Queue
+  participant W as Celery Worker
+  participant AI as Diffusers/PEFT
+  participant FS as AI_WAREHOUSE
+
+  UI->>API: POST /api/v1/t2i/submit
+  API->>Q: enqueue job + owner metadata
+  API-->>UI: job_id + queued state
+  W->>Q: reserve job
+  W->>AI: run inference/training
+  AI->>FS: write output/checkpoint/metadata
+  W->>Q: update running/succeeded/failed
+  UI->>API: GET /api/v1/t2i/status/{job_id}
+  API-->>UI: status + output metadata
+```
+
+## Demo Scenarios
+
+| Scenario | What it shows | Reviewer takeaway |
+| --- | --- | --- |
+| Text-to-image job | Prompt, seed, LoRA stack, timeline, output metadata | The system treats generation as a reproducible job, not a one-off button click. |
+| ControlNet guidance | Conditioned generation with pose/depth/canny/lineart style inputs | The API shape is ready for richer image-control workflows. |
+| Batch processing | Multi-prompt queue and downloadable outputs | The platform can scale beyond single-image experiments. |
+| LoRA training monitor | Dataset validation, loss trend, checkpoint export, progress state | Training is modeled as an observable long-running workflow. |
+| API contract | Submit/status/cancel state model and typed payload | UI behavior maps back to a concrete backend contract. |
+
+## API Map
+
+| Capability | Main endpoints | Runtime dependency | Notes |
+| --- | --- | --- | --- |
+| Health / docs | `GET /api/v1/health`, `/docs` | FastAPI only | First check for local review. |
+| Model registry | `GET /api/v1/models`, `POST /api/v1/models/scan` | AI model filesystem | Scans SD1.5, SDXL, ControlNet, LoRA, embeddings. |
+| T2I jobs | `POST /api/v1/t2i/submit`, `GET /api/v1/t2i/status/{job_id}` | Redis/Celery or local queue + model weights | Submit/status/cancel pattern. |
+| ControlNet | `POST /api/v1/controlnet/{pose|depth|canny|lineart}` | ControlNet weights | Conditioned generation hooks. |
+| Batch | `POST /api/v1/batch/submit` | Worker queue | Multi-prompt processing and output packaging. |
+| LoRA training | `POST /api/v1/finetune/lora/train` | Redis/Celery + training dataset | Dataset validation, progress, checkpoint export. |
+| Datasets | `GET /api/v1/datasets/list` | AI_WAREHOUSE dataset paths | Keeps training inputs outside the repo. |
+| Auth / WS | `POST /api/v1/auth/token`, `POST /api/v1/auth/ws_ticket`, `WS /api/v1/ws/train/{job_id}` | API security config | JWT/API key, CSRF, short-lived WebSocket tickets. |
+
+## Deployment View
+
+```mermaid
+flowchart TB
+  subgraph PublicDemo[Public portfolio demo]
+    repo[GitHub repo main]
+    action[GitHub Actions Pages workflow]
+    pages[GitHub Pages static site]
+    repo --> action --> pages
+  end
+
+  subgraph LocalFullStack[Local full-stack runtime]
+    env[.env + configs/*.yaml]
+    api[FastAPI]
+    redis[(Redis)]
+    worker[Celery workers]
+    frontend[React dev server]
+    models[(AI_MODELS_ROOT)]
+    data[(AI_DATASETS_ROOT / AI_TRAINING_ROOT)]
+    env --> api
+    env --> worker
+    frontend --> api
+    api --> redis
+    worker --> redis
+    worker --> models
+    worker --> data
+  end
+```
+
+## What Is Safe To Review Remotely
+
+| Review target | Works on GitHub Pages | Requires local setup |
+| --- | --- | --- |
+| Product positioning | Yes | No |
+| Screenshots and recording | Yes | No |
+| Scenario switching / mock job states | Yes | No |
+| API source code and tests | GitHub source | Optional |
+| Swagger `/docs` | No | Yes, start FastAPI |
+| Real GPU inference | No | Yes, model weights + compatible PyTorch stack |
+| LoRA training | No | Yes, Redis + Celery + dataset + GPU/CPU memory |
 
 ## What To Look For
 
