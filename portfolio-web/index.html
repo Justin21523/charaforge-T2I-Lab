@@ -25,6 +25,7 @@
       </a>
       <nav class="nav" aria-label="Primary">
         <a href="#demo">Demo</a>
+        <a href="#media">Media</a>
         <a href="#architecture">Architecture</a>
         <a href="#stack">Stack</a>
         <a href="#runbook">Runbook</a>
@@ -131,6 +132,95 @@
               </div>
             </div>
           </section>
+        </div>
+      </section>
+
+      <section class="section" id="media">
+        <div class="section-heading">
+          <p class="eyebrow">Screenshots and recording demo</p>
+          <h2>Ready-to-review media for GitHub Pages</h2>
+          <p>
+            This section gives interviewers a complete visual tour without requiring local setup.
+            The recording and screenshots are committed with the static site, so they work directly
+            from github.io.
+          </p>
+        </div>
+
+        <div class="media-layout">
+          <article class="recording-card">
+            <div class="panel-title">Recorded walkthrough</div>
+            <video
+              class="demo-video"
+              controls
+              preload="metadata"
+              poster="./assets/hero-dashboard.png"
+              aria-label="CharaForge T2I Lab recorded demo walkthrough"
+            >
+              <source src="./assets/demo-walkthrough.mp4" type="video/mp4" />
+              Your browser does not support the video tag.
+            </video>
+            <p>
+              A compact portfolio recording that shows the dashboard overview, generation result,
+              ControlNet state, batch queue, LoRA training monitor, and API/job contract.
+            </p>
+          </article>
+
+          <article class="demo-script">
+            <div class="panel-title">Interview recording script</div>
+            <ol>
+              <li>Open the live GitHub Pages demo and point out that it is static and reviewer-safe.</li>
+              <li>Select each scenario to show generation, ControlNet, batch, and LoRA workflows.</li>
+              <li>Replay the flow and explain job state transitions from queued to succeeded.</li>
+              <li>Show the API contract panel to connect the UI with FastAPI backend routes.</li>
+              <li>Scroll through architecture and stack sections to explain engineering depth.</li>
+              <li>End with the runbook so reviewers know how to run the full stack locally.</li>
+            </ol>
+          </article>
+        </div>
+
+        <div class="screenshot-grid" aria-label="Demo screenshots">
+          <figure class="screenshot-card">
+            <img src="./assets/hero-dashboard.png" alt="Dashboard overview screenshot" />
+            <figcaption>
+              <strong>Dashboard overview</strong>
+              <span>Landing state with feature positioning and local-stack context.</span>
+            </figcaption>
+          </figure>
+          <figure class="screenshot-card">
+            <img src="./assets/scenario-portrait.png" alt="Text-to-image output screenshot" />
+            <figcaption>
+              <strong>Text-to-image result</strong>
+              <span>Prompt, seed, LoRA stack, output metadata, and reviewable result.</span>
+            </figcaption>
+          </figure>
+          <figure class="screenshot-card">
+            <img src="./assets/scenario-controlnet.png" alt="ControlNet guidance screenshot" />
+            <figcaption>
+              <strong>ControlNet flow</strong>
+              <span>Conditioned generation example for pose/depth/canny workflows.</span>
+            </figcaption>
+          </figure>
+          <figure class="screenshot-card">
+            <img src="./assets/scenario-batch.png" alt="Batch processing screenshot" />
+            <figcaption>
+              <strong>Batch processing</strong>
+              <span>Multi-prompt queue state for bulk rendering and export flows.</span>
+            </figcaption>
+          </figure>
+          <figure class="screenshot-card">
+            <img src="./assets/scenario-lora.png" alt="LoRA training monitor screenshot" />
+            <figcaption>
+              <strong>LoRA training monitor</strong>
+              <span>Dataset validation, loss trend, checkpoint export, and worker progress.</span>
+            </figcaption>
+          </figure>
+          <figure class="screenshot-card">
+            <img src="./assets/scenario-api.png" alt="API and job state screenshot" />
+            <figcaption>
+              <strong>API and job state</strong>
+              <span>Backend contract and async status model shown in a reviewer-friendly format.</span>
+            </figcaption>
+          </figure>
         </div>
       </section>
 

@@ -12,6 +12,8 @@ The public demo is a static GitHub Pages walkthrough:
 
 - Demo site: `https://justin21523.github.io/charaforge-T2I-Lab/`
 - Source: [`portfolio-web/`](portfolio-web/)
+- Includes: interactive mock scenarios, screenshot gallery, recorded MP4 walkthrough,
+  architecture overview, stack notes, and reviewer runbook.
 
 GitHub Pages cannot run GPU inference, Redis, Celery, or private model weights. The demo
 therefore uses mock/recorded states for stable portfolio review while the repo keeps the
@@ -25,7 +27,7 @@ real FastAPI backend and worker code for local execution.
 - Model registry scanning for SD1.5, SDXL, ControlNet, LoRA, and embeddings.
 - Dataset upload/validation safeguards for fine-tuning workflows.
 - React dashboard for generation, ControlNet, batch processing, LoRA management, training monitor, gallery, and jobs.
-- Static portfolio packaging that makes the project understandable without GPU hardware.
+- Static portfolio packaging with screenshots and a recorded walkthrough that make the project understandable without GPU hardware.
 
 ## Current Status
 
